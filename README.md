@@ -88,11 +88,11 @@ cd ~/TUGUMIv6
 ./start_cli.sh
 ```
 
-### WebUIモード (ポート 8080)
+### WebUIモード (ポート 8086)
 ```bash
 cd ~/TUGUMIv6
 ./start_webui.sh
-# ブラウザで http://localhost:8080 にアクセス
+# ブラウザで http://localhost:8086 にアクセス
 ```
 
 ### テストの実行

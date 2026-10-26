@@ -1,0 +1,6 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# TUGUMIv6 Crypto Trader Quick Launcher
+# Usage: ./crypto-trader [scan|portfolio|test-trade|daemon]
+
+TARGET_DIR="/data/data/com.termux/files/home/TUGUMIv6/crypto_trader"
+python3 "${TARGET_DIR}/trader_cli.py" "$@"

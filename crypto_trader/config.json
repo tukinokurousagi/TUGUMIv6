@@ -1,0 +1,55 @@
+{
+  "api_key": "",
+  "api_secret": "",
+  "base_url": "https://api.binance.com",
+  "mode": "LIVE",
+  "trade_currency": "JPY",
+  "default_symbol": "SUIJPY",
+  "initial_capital_jpy": 1887.0,
+  "symbols_to_monitor": [
+    "SUIJPY",
+    "PEPEJPY",
+    "SOLJPY",
+    "XRPJPY",
+    "DOGEJPY",
+    "BTCJPY",
+    "ETHJPY",
+    "BNBJPY",
+    "SHIBJPY",
+    "TRUMPJPY",
+    "FETJPY",
+    "NEARJPY",
+    "APTJPY",
+    "SEIJPY",
+    "LINKJPY",
+    "ADAJPY",
+    "TRXJPY",
+    "XLMJPY"
+  ],
+  "all_jpy_symbols": [
+    "ADAJPY", "APTJPY", "BCHJPY", "BNBJPY", "BTCJPY", "DOGEJPY",
+    "ETHJPY", "FETJPY", "GIGGLEJPY", "IOTXJPY", "LINKJPY", "LPTJPY",
+    "LTCJPY", "MEMEJPY", "NEARJPY", "PEPEJPY", "POLJPY", "SEIJPY",
+    "SHIBJPY", "SOLJPY", "SUIJPY", "TAOJPY", "TRBJPY", "TRUMPJPY",
+    "TRXJPY", "XLMJPY", "XRPJPY"
+  ],
+  "order_budget_jpy": 115.0,
+  "safety_guard": {
+    "max_daily_budget_jpy": 3000.0,
+    "min_order_jpy": 100.0,
+    "safe_order_jpy": 115.0,
+    "circuit_breaker_loss_pct": 0.08
+  },
+  "quant_strategy": {
+    "hard_take_profit_pct": 0.25,
+    "hard_trailing_trigger_pct": 0.15,
+    "hard_trailing_drop_pct": 0.04,
+    "hard_stop_loss_pct": -0.08,
+    "smart_trail_trigger_pct": 0.04,
+    "smart_trail_drop_pct": 0.018,
+    "momentum_tp_pct": 0.025,
+    "entry_alpha_threshold": 60.0,
+    "rotation_target_alpha": 74.0,
+    "rotation_weak_alpha": 40.0
+  }
+}

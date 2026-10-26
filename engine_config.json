@@ -1,0 +1,17 @@
+{
+  "provider": "gemini",
+  "primary_engine": "antigravity",
+  "api_key": "",
+  "gemini_model": "gemini-3.8-flash",
+  "thinking_level": "medium",
+  "fallback_model": "gemini-3.8-flash",
+  "fallback_model_lite": "gemini-3.8-flash",
+  "embedding_model": "gemini-embedding-2",
+  "rag_paths": [
+    "/storage/emulated/0/TUGUMIDesk/TUGUMI_RAG",
+    "/storage/emulated/0/TUGUMIDesk"
+  ],
+  "antigravity_harness": "/data/data/com.termux/files/home/bin/localharness-termux",
+  "timeout": 300.0,
+  "max_retries": 1
+}

@@ -1,0 +1,42 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Linting caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs & Process IDs
+*.log
+logs/*.log
+logs/*.pid
+logs/heartbeats.json
+logs/tools/
+
+# Databases & Runtime State
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/tugumi_memory.db
+data/rag_vector_cache.json
+data/snapshots/
+crypto_trader/trader_history.db
+
+# Secrets & Environment variables
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Temporary, Backup & Editor files
+*.tmp
+*.swp
+*.bak
+*.bak*
+*~
+.DS_Store

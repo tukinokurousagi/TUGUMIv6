@@ -43,6 +43,73 @@ class EngineManager:
             gemini_client=self.gemini,
             model=self.config.get("gemini_model", "gemini-3.8-flash")
         )
+        self._rag_engine = None
+
+    def _get_rag_engine(self) -> Optional[Any]:
+        """HybridRAGEngineの遅延ロード"""
+        if self._rag_engine is not None:
+            return self._rag_engine
+        try:
+            from memory.rag_engine import HybridRAGEngine
+            self._rag_engine = HybridRAGEngine(gemini_client=self.gemini)
+        except Exception as e:
+            logger.debug(f"[EngineManager] Failed to init HybridRAGEngine: {e}")
+            self._rag_engine = None
+        return self._rag_engine
+
+    def _inject_rag_context(
+        self,
+        prompt: str,
+        system_instruction: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """ユーザープロンプトから関連ナレッジを自動検索し、システム指示に自然に注入 (Zero-Shot Auto-RAG)"""
+        if not prompt or len(prompt.strip()) < 4:
+            return system_instruction, None
+
+        # トークン防衛: 挨拶や短文リアクションはスキップ
+        p_clean = prompt.strip().lower()
+        skip_phrases = {
+            "こんにちは", "おはよう", "こんばんは", "ありがとう", "どうも", "了解",
+            "お疲れ様", "お疲れ様です", "はい", "いいえ", "うん", "ううん", "ok", "yes", "no"
+        }
+        if p_clean in skip_phrases:
+            return system_instruction, None
+
+        rag = self._get_rag_engine()
+        if not rag:
+            return system_instruction, None
+
+        rag_context = None
+        try:
+            results = rag.search_hybrid(prompt, top_k=3)
+            if results:
+                snippets = []
+                for idx, r in enumerate(results):
+                    content = r.get("content", "").strip()
+                    title = r.get("title", "Unknown")
+                    cat = r.get("category", "General")
+                    if content and len(content) > 10:
+                        snippets.append(f"[{idx + 1}] ドキュメント: `{title}` (カテゴリ: {cat})\n{content[:800]}")
+
+                if snippets:
+                    rag_context = (
+                        "【自律参照ナレッジベース (Auto-RAG Knowledge)】\n"
+                        "以下の情報は、ローカルナレッジベース（TUGUMI_RAG等）から自動検索された確定情報です。\n"
+                        "拓磨様への回答やタスク実行時に優先的な事実として自然に反映してください。\n"
+                        + "\n---\n".join(snippets)
+                    )
+        except Exception as e:
+            logger.debug(f"[EngineManager] Auto-RAG search error: {e}")
+
+        if not rag_context:
+            return system_instruction, None
+
+        merged = (system_instruction or "").strip()
+        if merged:
+            merged = f"{merged}\n\n{rag_context}"
+        else:
+            merged = rag_context
+        return merged, rag_context
 
     def _load_config(self) -> Dict[str, Any]:
         if os.path.exists(self.config_path):
@@ -145,6 +212,7 @@ class EngineManager:
         """単発実行 (エラー時に別エンジンで勝手に2重実行しない Fail-Fast 設計)"""
         active_level = thinking_level or self.thinking_level
         effective_sys_inst, _ = self._inject_awm_guidance(prompt, system_instruction)
+        effective_sys_inst, _ = self._inject_rag_context(prompt, effective_sys_inst)
 
         if self.antigravity.is_available() and self.primary_engine == "antigravity":
             res = self.antigravity.execute_task(
@@ -174,6 +242,7 @@ class EngineManager:
         """
         active_level = thinking_level or self.thinking_level
         effective_sys_inst, _ = self._inject_awm_guidance(prompt, system_instruction)
+        effective_sys_inst, _ = self._inject_rag_context(prompt, effective_sys_inst)
 
         collected_steps: list[dict[str, Any]] = []
         step_idx = 1

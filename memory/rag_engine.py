@@ -328,6 +328,23 @@ class HybridRAGEngine:
                 pass
         return "\n".join(info_lines)
 
+    def _extract_image_multimodal_content(self, file_path: str, rel_path: str, folder: str, ext: str) -> str:
+        """画像からメタデータおよびGemini Vision APIによるマルチモーダルOCR・視覚記述を抽出する"""
+        metadata_text = self._extract_image_or_media_metadata(file_path, rel_path, folder, ext)
+        client = self._ensure_client()
+        if not client:
+            return metadata_text
+
+        try:
+            if hasattr(client, "analyze_image"):
+                vision_analysis = client.analyze_image(file_path)
+                if vision_analysis and vision_analysis.strip():
+                    return f"{metadata_text}\n\n【画像解析・OCR・視覚ナレッジ (Vision Knowledge)】\n{vision_analysis.strip()}"
+        except Exception as e:
+            print(f"[RAGEngine] Vision analysis skipped for {os.path.basename(file_path)}: {e}")
+
+        return metadata_text
+
     def extract_document_content(self, file_path: str, base_dir: str) -> Tuple[str, Dict[str, Any]]:
         """
         任意のファイルからRAG登録用のテキストとメタデータを抽出する。
@@ -358,7 +375,7 @@ class HybridRAGEngine:
         elif ext in self.OFFICE_EXTENSIONS:
             extracted_text = self._extract_office_text(file_path, ext)
         elif ext in self.IMAGE_EXTENSIONS and ext != ".svg":
-            extracted_text = self._extract_image_or_media_metadata(file_path, rel_path, folder, ext)
+            extracted_text = self._extract_image_multimodal_content(file_path, rel_path, folder, ext)
         elif ext in self.MEDIA_EXTENSIONS:
             extracted_text = self._extract_image_or_media_metadata(file_path, rel_path, folder, ext)
         elif ext in self.TEXT_EXTENSIONS or ext == ".svg":

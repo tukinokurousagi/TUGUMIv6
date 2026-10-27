@@ -279,3 +279,61 @@ class GeminiClient:
             all_embeddings.extend(batch_result)
 
         return all_embeddings
+
+    def analyze_image(
+        self,
+        image_path: str,
+        prompt: str = "この画像の内容を詳細に分析し、RAG検索用テキストとして日本語で出力してください。\n1. 画像内に書かれているすべての文字（OCR）\n2. 画像に写っている主な被写体、図表、UI、構成、または情景の詳細な説明\n3. 検索キーワードとなりうる技術用語や関連概念",
+        model_override: str | None = None
+    ) -> str:
+        """マルチモーダルVision APIによる画像内容・OCRの抽出"""
+        if not os.path.exists(image_path):
+            return ""
+        target_model = model_override or self.model
+        ext = os.path.splitext(image_path)[1].lower()
+        mime_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp"
+        }
+        mime_type = mime_map.get(ext, "image/jpeg")
+
+        try:
+            with open(image_path, "rb") as f:
+                img_bytes = f.read()
+
+            if self.sdk_client and types:
+                part = types.Part.from_bytes(data=img_bytes, mime_type=mime_type)
+                resp = self.sdk_client.models.generate_content(
+                    model=target_model,
+                    contents=[part, prompt]
+                )
+                return (resp.text or "").strip()
+
+            # REST fallback
+            import base64
+            b64_data = base64.b64encode(img_bytes).decode("utf-8")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={self.api_key}"
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"inline_data": {"mime_type": mime_type, "data": b64_data}},
+                        {"text": prompt}
+                    ]
+                }],
+                "safetySettings": self._get_rest_safety_settings()
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                res = json.loads(resp.read().decode("utf-8", errors="replace"))
+                cands = res.get("candidates", [])
+                if cands and "content" in cands[0] and "parts" in cands[0]["content"]:
+                    return "\n".join(p.get("text", "") for p in cands[0]["content"]["parts"]).strip()
+        except Exception as e:
+            print(f"[GeminiClient] Image analysis error: {e}")
+            return ""
+        return ""

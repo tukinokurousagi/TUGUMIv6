@@ -28,6 +28,7 @@ MAIN_COMMANDS: Dict[str, str] = {
     "/skills": "TUGUMIv6 SKILLエコシステム全61種一覧・検索 (/skills [word])",
     "/skill": "指定スキルの詳細確認・手動強制発動 (/skill <スキル名> [指示])",
     "/mcp": "MCP 2.0 連携サーバー・ツール一覧確認 (/mcp [server])",
+    "/awm": "AWM自律学習ステータス・ワークフロー一覧・パージ (/awm [list|purge])",
     "/model": "推論モデル切替 (gemini-3.8-flash ⇄ gemini-4-argon / 3.0-pro)",
     "/session": "常駐 AntigravitySession の状態検視・リセット (/session [reset])",
     "/compact": "対話コンテキストのロスレス圧縮・トークン節約 (/compact)",

@@ -37,8 +37,7 @@ def run_pty_test():
 
     # Parent process
     os.close(slave)
-    output = []
-    
+
     def read_until(pattern, timeout=90.0):
         start_t = time.time()
         buf = ""

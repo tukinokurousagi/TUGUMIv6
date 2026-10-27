@@ -1124,6 +1124,44 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
 - **Antigravity SDK ネイティブ圧縮**: `CompactionConfig(token_threshold=150,000)` 常時有効"""
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
 
+    # 1.95 AWM (Agent Workflow Memory) 管理 (/awm)
+    if cmd == "/awm":
+        subcmd = args[0].lower() if args else "status"
+        stats = engine.get_awm_stats()
+
+        if subcmd in ("purge", "clean"):
+            purged = engine.purge_awm_workflows(max_failures=2)
+            reply = f"""### 🧹 AWM ガベージコレクション完了
+- **パージ件数**: `{purged}` 件の失敗・陳腐化ワークフローを抹消
+- **防護状態**: データベース純化完了（ゴミ・ノイズ蓄積ゼロ維持）"""
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        if subcmd in ("list", "ls", "all"):
+            wfs = stats.get("workflows", [])
+            lines = [f"### 🧠 AWM 学習済みワークフロー一覧 ({len(wfs)}件)\n"]
+            if not wfs:
+                lines.append("> 現在、登録されているワークフローはありません。")
+            else:
+                for idx, w in enumerate(wfs, start=1):
+                    lines.append(f"**{idx}. `{w.get('name')}`** (ステップ数: `{w.get('steps')}`, 成功: `{w.get('success')}`回 / 失敗: `{w.get('failures')}`回)")
+                    lines.append(f"- 目標パターン: *{w.get('goal')}*")
+                    lines.append(f"- 更新日時: `{w.get('updated_at')}`\n")
+            reply = "\n".join(lines)
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        # デフォルトステータス
+        total_wf = stats.get("total_workflows", 0)
+        replays = stats.get("total_success_replays", 0)
+        saved_tok = stats.get("estimated_saved_tokens", 0)
+        reply = f"""### 🧠 Agent Workflow Memory (AWM) 自律学習ステータス
+- **登録ワークフロー数**: `{total_wf}` 件
+- **実証済み再利用回数**: `{replays}` 回
+- **推定削減トークン数**: `{saved_tok:,}` tok（最短ショートカット実証）
+- **ノイズ防護壁**: 3ステップ未満除外 ＆ 構造的品質ゲート常時稼働
+
+> 💡 `/awm list` で一覧確認、`/awm purge` でゴミデータ掃除を実行できます。"""
+        return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
     # 2. システム状態 (/status)
     if cmd == "/status":
         evidence, rep = _get_telemetry_evidence()
@@ -1821,15 +1859,24 @@ Torネットワーク上の **16基の `.onion` 検索エンジン** を一斉�
     # 18.4 Gemini Live 女性ボイス＆トーン設定 (/voice)
     if cmd == "/voice":
         voice_cfg_path = os.path.expanduser("~/.tugumi_live_voice.json")
-        curr_v = {"voice": "Aoede", "tone": "standard"}
+        curr_v = {
+            "voice": memory.get_kv("live_voice", "Aoede"),
+            "tone": memory.get_kv("live_tone", "standard"),
+        }
         if os.path.exists(voice_cfg_path):
             try:
                 with open(voice_cfg_path, "r", encoding="utf-8") as vf:
                     curr_v.update(json.load(vf))
             except Exception:
                 pass
+        if curr_v.get("voice") not in AVAILABLE_LIVE_VOICES:
+            curr_v["voice"] = "Aoede"
+        if curr_v.get("tone") not in AVAILABLE_LIVE_TONES:
+            curr_v["tone"] = "standard"
         if args:
             req_v = args[0].strip()
+            if req_v.lower() == "gentle":
+                req_v = "sweet"
             matched_v = next((k for k in AVAILABLE_LIVE_VOICES if k.lower() == req_v.lower()), None)
             matched_t = next((k for k in AVAILABLE_LIVE_TONES if k.lower() == req_v.lower()), None)
             if matched_v:
@@ -1843,8 +1890,12 @@ Torネットワーク上の **16基の `.onion` 検索エンジン** を一斉�
                     "mode": mode,
                     "session_id": session_id,
                 }
-            if len(args) > 1 and args[1].lower() in AVAILABLE_LIVE_TONES:
-                curr_v["tone"] = args[1].lower()
+            if len(args) > 1:
+                second_t = "sweet" if args[1].lower() == "gentle" else args[1].lower()
+                if second_t in AVAILABLE_LIVE_TONES:
+                    curr_v["tone"] = second_t
+            memory.set_kv("live_voice", curr_v["voice"])
+            memory.set_kv("live_tone", curr_v["tone"])
             try:
                 with open(voice_cfg_path, "w", encoding="utf-8") as vf:
                     json.dump(curr_v, vf, ensure_ascii=False, indent=2)
@@ -2032,41 +2083,6 @@ async def chat_endpoint(req: ChatRequest):
             f"【自律完遂ゴールモード (/goal)】\n目標: {goal_obj}\n"
             f"Explore → Plan → Execute → Verify (5層検証ゲート) を完全自律で遂行し、客観的証拠とともに完遂報告してください。"
         )
-
-    # 暗号資産・バイナンス運用リクエスト検知 (Web UI チャット直結・英字部分一致誤爆防止付き)
-    msg_lower = user_msg.lower()
-    crypto_jp_kw = ["バイナンス", "binance", "暗号資産", "仮想通貨", "ビットコイン", "リップル", "ソラナ", "イーサリアム"]
-    crypto_dev_exclude = ["コード", "バグ", "修正", "エラー", "関数", "スクリプト", "ファイル", "メソッド", "テスト"]
-    has_crypto_ticker = bool(re.search(r"(?<![a-z0-9])(btc|xrp|sol|eth|bnb|sui|pepe|doge)(?:jpy)?(?![a-z0-9])", msg_lower))
-    if not any(ex in msg_lower for ex in crypto_dev_exclude) and (any(k in msg_lower for k in crypto_jp_kw) or has_crypto_ticker):
-        if any(w in msg_lower for w in ["残高", "いくら", "ウォレット", "所持"]):
-            crypto_res = execute_slash_command("/binance balance", mode=mode, session_id=session_id)
-            if crypto_res:
-                memory.add_message("user", user_msg, mode=mode, session_id=session_id)
-                memory.add_message("assistant", crypto_res["reply"], mode=crypto_res.get("new_mode", mode), session_id=session_id)
-                return crypto_res
-        elif any(w in msg_lower for w in ["相場", "スキャン", "チャート", "分析", "状況"]):
-            crypto_res = execute_slash_command("/binance scan", mode=mode, session_id=session_id)
-            if crypto_res:
-                memory.add_message("user", user_msg, mode=mode, session_id=session_id)
-                memory.add_message("assistant", crypto_res["reply"], mode=crypto_res.get("new_mode", mode), session_id=session_id)
-                return crypto_res
-        elif any(w in msg_lower for w in ["買って", "買っておいて", "購入", "買い"]):
-            target_sym = "XRP" if ("xrp" in msg_lower or "リップル" in msg_lower) else ("BTC" if ("btc" in msg_lower or "ビットコイン" in msg_lower) else ("SOL" if ("sol" in msg_lower or "ソラナ" in msg_lower) else "XRP"))
-            m = re.search(r"(\d+)\s*円", user_msg)
-            amt = float(m.group(1)) if m else 100.0
-            crypto_res = execute_slash_command(f"/binance buy {target_sym} {amt}", mode=mode, session_id=session_id)
-            if crypto_res:
-                memory.add_message("user", user_msg, mode=mode, session_id=session_id)
-                memory.add_message("assistant", crypto_res["reply"], mode=crypto_res.get("new_mode", mode), session_id=session_id)
-                return crypto_res
-        elif any(w in msg_lower for w in ["売って", "売却", "利確", "売る"]):
-            target_sym = "XRP" if ("xrp" in msg_lower or "リップル" in msg_lower) else ("BTC" if ("btc" in msg_lower or "ビットコイン" in msg_lower) else ("SOL" if ("sol" in msg_lower or "ソラナ" in msg_lower) else "XRP"))
-            crypto_res = execute_slash_command(f"/binance sell {target_sym}", mode=mode, session_id=session_id)
-            if crypto_res:
-                memory.add_message("user", user_msg, mode=mode, session_id=session_id)
-                memory.add_message("assistant", crypto_res["reply"], mode=crypto_res.get("new_mode", mode), session_id=session_id)
-                return crypto_res
 
     # 楽曲制作リクエスト検知 (Web UI チャット直結・プロンプトぶつ切り完全排除)
     if is_music_creation_intent(user_msg):
@@ -3633,11 +3649,14 @@ async def get_voice_sample(voice_name: str):
 async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", tone: str = "standard"):
     """Gemini 3.8 Multimodal Live API (WSS) 双方向ストリーミング中継エンドポイント (女性Voice/Tone選択対応)"""
     await websocket.accept()
+    if tone == "gentle":
+        tone = "sweet"
     selected_voice = voice if voice in AVAILABLE_LIVE_VOICES else "Aoede"
     selected_tone = tone if tone in AVAILABLE_LIVE_TONES else "standard"
     logger.info(f"[Gemini Live] クライアント接続確立 (Voice: {selected_voice}, Tone: {selected_tone})")
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    from core.gemini_client import _resolve_gemini_api_key
+    api_key = _resolve_gemini_api_key("")
     if not api_key or genai is None:
         await websocket.send_json({"type": "error", "message": "GEMINI_API_KEYが未設定またはgoogle-genai SDKが利用できません"})
         await websocket.close()
@@ -3657,11 +3676,14 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
         "・日常の雑談、趣味や関心事、日々の出来事、技術の深い議論、お悩み相談など、あらゆるテーマで対話を豊かに深めてください。\n"
         "・返答のテンポを良くし、聞き取りやすい滑らかな日本語で、敬愛と親密さを込めて語りかけてください。\n"
         "【タスク依頼・ツール自律実行ルール】\n"
+        "・拓磨様から最新ニュース・天気・人物・トレンド・調べ物を尋ねられたら、即座に `search_web_realtime` を実行してその場で結果を声で伝えてください。\n"
+        "・拓磨様から過去の記憶・設定・社内ナレッジ・以前の作業について尋ねられたら、`recall_tugumi_memory` を実行して長期記憶やRAGから正確に引き出してください。\n"
+        "・拓磨様から「画像を作って」「イラスト描いて」「曲を作って」「作曲して」と依頼されたら、`generate_creative_media` を実行してください。\n"
         "・拓磨様から「〇〇を設定して」「ボイスを変えて」「トーンを変えて」と依頼されたら、必ず `update_live_settings` を実行してください。\n"
         "・拓磨様から「メモしておいて」「今の記録を残して」「レポート書いて」と依頼されたら、必ず `save_desk_note` を実行してTUGUMIDeskに保存してください。\n"
         "・拓磨様から「日報作って」「ブリーフィングお願い」「天気教えて」と依頼されたら、`generate_daily_briefing` を実行してください。\n"
         "・拓磨様から「仮想通貨はどう？」「バイナンスの残高は？」と聞かれたら、`get_crypto_portfolio` を実行してください。\n"
-        "・拓磨様から「〇〇について詳しく調べて」「リサーチして」と依頼されたら、`dispatch_background_research` を実行してください。\n"
+        "・拓磨様から「〇〇について徹底的な長文レポートをまとめておいて」と依頼されたら、`dispatch_background_research` を実行してください。\n"
         "・端末情報やコマンド実行を求められたら、`get_system_telemetry` や `run_termux_command` を実行してください。\n"
         "・ツールを実行した後は、その結果を拓磨様にわかりやすく、親しみやすい声で報告してください。"
     )
@@ -3669,6 +3691,40 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
     tools_def = [
         {
             "function_declarations": [
+                {
+                    "name": "search_web_realtime",
+                    "description": "最新ニュース、天気、人物、技術情報などをリアルタイムでWeb検索・ニュース検索し、今すぐ会話で回答するための最新ファクトを取得します",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "query": {"type": "STRING", "description": "検索キーワード"}
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "recall_tugumi_memory",
+                    "description": "TUGUMIv6の4層エビングハウス長期記憶（SQLite FTS5）および3072次元ハイブリッドRAGから過去の記録・設定・ナレッジを検索します",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "query": {"type": "STRING", "description": "記憶やRAGから検索するキーワード"}
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "generate_creative_media",
+                    "description": "拓磨様の指示に基づき、高精細AI画像の生成（GeminiImageStudio）またはボーカル/インスト楽曲の作曲（GeminiMusicStudio）を実行します",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "media_type": {"type": "STRING", "description": "'image' (画像生成) または 'music' (楽曲作曲)"},
+                            "prompt": {"type": "STRING", "description": "生成する画像または楽曲のテーマ・詳細指示"}
+                        },
+                        "required": ["media_type", "prompt"]
+                    }
+                },
                 {
                     "name": "run_termux_command",
                     "description": "Android Termux環境でBashコマンドを実行し、結果（標準出力）を取得します",
@@ -3741,7 +3797,49 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
 
     async def _handle_tool(tool_name: str, tool_args: dict) -> dict:
         try:
-            if tool_name == "run_termux_command":
+            if tool_name == "search_web_realtime":
+                q = tool_args.get("query", "").strip()
+                if not q:
+                    return {"status": "error", "message": "検索クエリが空です"}
+                from tools.research_tools import ResearchTools
+                rt = ResearchTools(timeout=20.0)
+                news = await asyncio.to_thread(rt.search_news_rss, q, 4)
+                web = await asyncio.to_thread(rt.search_web_lite, q, 4, False)
+                combined = []
+                for item in (news or [])[:3]:
+                    combined.append(f"[News] {item.get('title','')}: {item.get('snippet','')}")
+                for item in (web or [])[:3]:
+                    combined.append(f"[Web] {item.get('title','')}: {item.get('snippet','')}")
+                return {"status": "success", "query": q, "results": "\n".join(combined)[:1200] or "該当する最新情報が見つかりませんでした"}
+
+            elif tool_name == "recall_tugumi_memory":
+                q = tool_args.get("query", "").strip()
+                if not q:
+                    return {"status": "error", "message": "検索キーワードが空です"}
+                mem_hits = await asyncio.to_thread(memory.recall, q, 4)
+                rag_hits = await asyncio.to_thread(rag.search, q, 3)
+                out_parts = []
+                for m in (mem_hits or []):
+                    out_parts.append(f"[Memory:{m.get('category','')}] {m.get('key','')}: {str(m.get('value',''))[:200]}")
+                for r in (rag_hits or []):
+                    out_parts.append(f"[RAG:{r.get('title','')}] {str(r.get('content',''))[:200]}")
+                return {"status": "success", "query": q, "memories": "\n".join(out_parts)[:1200] or "該当する記憶が見つかりませんでした"}
+
+            elif tool_name == "generate_creative_media":
+                m_type = tool_args.get("media_type", "image").strip().lower()
+                prompt_txt = tool_args.get("prompt", "").strip()
+                if not prompt_txt:
+                    return {"status": "error", "message": "プロンプトが空です"}
+                if m_type == "music":
+                    from tools.media_tools import GeminiMusicStudio
+                    res = await asyncio.to_thread(GeminiMusicStudio.create_music_direct, prompt_txt)
+                    return {"status": "success", "media_type": "music", "result": str(res)[:600]}
+                else:
+                    from tools.media_tools import GeminiImageStudio
+                    res = await asyncio.to_thread(GeminiImageStudio.generate, prompt_txt)
+                    return {"status": "success", "media_type": "image", "result": str(res)[:600]}
+
+            elif tool_name == "run_termux_command":
                 cmd = tool_args.get("command", "")
                 proc = await asyncio.create_subprocess_shell(
                     cmd,
@@ -3759,6 +3857,8 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
             elif tool_name == "update_live_settings":
                 v = tool_args.get("voice")
                 t = tool_args.get("tone")
+                if t == "gentle":
+                    t = "sweet"
                 updated = {}
                 if v and v in AVAILABLE_LIVE_VOICES:
                     memory.set_kv("live_voice", v)
@@ -3767,6 +3867,16 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
                     memory.set_kv("live_tone", t)
                     updated["tone"] = t
                 if updated:
+                    try:
+                        voice_cfg_path = os.path.expanduser("~/.tugumi_live_voice.json")
+                        curr_v = {
+                            "voice": memory.get_kv("live_voice", "Aoede"),
+                            "tone": memory.get_kv("live_tone", "standard"),
+                        }
+                        with open(voice_cfg_path, "w", encoding="utf-8") as vf:
+                            json.dump(curr_v, vf, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
                     await websocket.send_json({"type": "settings_updated", **updated})
                     return {"status": "success", "message": f"設定を更新しました: {updated}", "note": "ブラウザUIに即時反映されました"}
                 return {"status": "noop", "message": "変更対象の設定項目が見つかりませんでした"}
@@ -4407,6 +4517,10 @@ async def get_settings():
         assistant_name = memory.get_kv("assistant_name", "つぐみ")
         live_voice = memory.get_kv("live_voice", "Aoede")
         live_tone = memory.get_kv("live_tone", "standard")
+        if live_voice not in AVAILABLE_LIVE_VOICES:
+            live_voice = "Aoede"
+        if live_tone not in AVAILABLE_LIVE_TONES:
+            live_tone = "standard"
         return {
             "mode": mode,
             "user_avatar": user_avatar,
@@ -4434,6 +4548,17 @@ async def get_thinking_level():
         "available_levels": ["high", "medium", "low", "minimal"],
         "safety_settings": "BLOCK_NONE"
     }
+
+@app.get("/api/awm/stats")
+async def get_awm_stats_endpoint():
+    """AWM学習統計の取得"""
+    return JSONResponse(content=engine.get_awm_stats())
+
+@app.post("/api/awm/purge")
+async def purge_awm_endpoint():
+    """失敗多数または低品質・陳腐化ワークフローのパージ"""
+    purged = engine.purge_awm_workflows(max_failures=2)
+    return JSONResponse(content={"status": "success", "purged_count": purged})
 
 @app.post("/api/settings/thinking_level")
 async def set_thinking_level_endpoint(req: ThinkingLevelRequest):

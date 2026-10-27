@@ -279,7 +279,7 @@ def inspect_fpf_status() -> Dict[str, Any]:
     core_files = [
         os.path.join(HOME, "TUGUMIv6", "engine_config.json"),
         os.path.join(HOME, "TUGUMIv6", "persona", "soul.py"),
-        os.path.join(HOME, "TUGUMIv6", "core", "engine.py"),
+        os.path.join(HOME, "TUGUMIv6", "core", "engine_manager.py"),
         os.path.join(HOME, ".agents", "TSUGUMI_MEMORY.md"),
     ]
     file_audits = []

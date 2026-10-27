@@ -82,3 +82,35 @@ def test_no_deceptive_mock_or_benchmark_hardcoding_in_dark_tugumi():
     assert "def mcp_call(" in tools_src
     assert "save_report_to_desk" in tools_src
 
+
+def test_tugumi_v6_core_functions_not_restricted_by_binance():
+    """バイナンス優先によるTUGUMIv6基本機能の制限・ダウングレードが存在しないことを検証"""
+    import json
+    from core.gemini_client import _resolve_gemini_api_key
+
+    # 1. engine_config.json の thinking_level が "high" (Switch 2 フルスペック) であること
+    cfg_path = Path("/data/data/com.termux/files/home/TUGUMIv6/engine_config.json")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert cfg.get("thinking_level") == "high", "【規約違反】engine_config.json の thinking_level が high からダウングレードされています！"
+
+    # 2. 非対話環境 (cron / デイリーブリーフィング等) でも API キーが確実に解決されること
+    resolved_key = _resolve_gemini_api_key("")
+    assert len(resolved_key) > 20, "【規約違反】非対話環境で Gemini API キーが解決できず、デイリーブリーフィング等の基本機能が遮断されています！"
+
+    # 3. WebUI チャット (/api/chat) が自然言語メッセージを /binance 固定コマンドへ強制横取りしていないこと
+    web_srv_path = Path("/data/data/com.termux/files/home/TUGUMIv6/interfaces/web/web_server.py")
+    web_src = web_srv_path.read_text(encoding="utf-8")
+    assert 'execute_slash_command("/binance scan"' not in web_src, (
+        "【規約違反】WebUIチャットがAI推論をバイパスして /binance scan へ強制インターセプトしています！"
+    )
+    assert 'execute_slash_command("/binance balance"' not in web_src, (
+        "【規約違反】WebUIチャットがAI推論をバイパスして /binance balance へ強制インターセプトしています！"
+    )
+
+    # 4. Gemini Live API (/api/live/ws) が _resolve_gemini_api_key を使用し、即時Web検索・長期記憶・メディア生成ツールを完備していること
+    assert "_resolve_gemini_api_key" in web_src
+    for live_tool in ("search_web_realtime", "recall_tugumi_memory", "generate_creative_media"):
+        assert f'"name": "{live_tool}"' in web_src, f"【規約違反】Gemini Live API から基本ツール '{live_tool}' が欠落しています！"
+
+
+

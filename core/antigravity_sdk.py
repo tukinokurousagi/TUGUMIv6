@@ -12,6 +12,7 @@ import asyncio
 import queue
 import threading
 from typing import Dict, Any, Optional, List, AsyncIterator, Iterator, Tuple, Callable
+from .gemini_client import _resolve_gemini_api_key
 
 # Ensure Termux harness wrapper path is configured
 DEFAULT_HARNESS_PATH = "/data/data/com.termux/files/home/bin/localharness-termux"
@@ -96,8 +97,9 @@ class AntigravityEngine:
         workspace: str = "/data/data/com.termux/files/home",
         thinking_level: str = "high"
     ):
+        from core.gemini_client import _resolve_gemini_api_key
         self.available = ANTIGRAVITY_AVAILABLE
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+        self.api_key = _resolve_gemini_api_key(api_key or "")
         self.model = model
         self.system_instruction = system_instruction
         self.workspace = workspace
@@ -321,7 +323,7 @@ class AntigravityEngine:
         robin_py = "/data/data/com.termux/files/home/robin_venv/bin/python3"
         robin_srv = "/data/data/com.termux/files/home/robin/mcp_server.py"
         if os.path.exists(robin_py) and os.path.exists(robin_srv):
-            api_k = self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+            api_k = _resolve_gemini_api_key(self.api_key)
             servers.append(McpStdioServer(
                 name="robin",
                 command=robin_py,

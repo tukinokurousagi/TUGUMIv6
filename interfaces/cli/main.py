@@ -1932,6 +1932,75 @@ def run_cli():
                     console.print()
                 continue
 
+            # 14.4 AWM (Agent Workflow Memory) 管理 (/awm)
+            if user_input.startswith("/awm"):
+                parts = user_input.split()
+                subcmd = parts[1].lower() if len(parts) >= 2 else "status"
+
+                p = CYBER_PALETTES.get(curr_mode, CYBER_PALETTES["light"])
+                stats = engine.get_awm_stats()
+
+                if subcmd in ("purge", "clean"):
+                    purged = engine.purge_awm_workflows(max_failures=2)
+                    p_panel = Panel(
+                        f"[bold green]✔ AWMガベージコレクション完了[/bold green]\n\n"
+                        f"[cyan]• パージ件数:[/] {purged} 件の失敗・陳腐化ワークフローを抹消\n"
+                        f"[cyan]• 状態:[/] データベース純化完了 (ゴミ・ノイズ蓄積ゼロ保持)",
+                        title=f"[bold {p['primary']}]◈ AWM Garbage Collection ◈[/bold {p['primary']}]",
+                        border_style=p["border"]
+                    )
+                    console.print()
+                    console.print(p_panel)
+                    console.print()
+                    continue
+
+                if subcmd in ("list", "ls", "all"):
+                    wfs = stats.get("workflows", [])
+                    wf_table = Table(
+                        title=f"[bold {p['primary']}]🧠 AWM 学習済みワークフロー一覧 ({len(wfs)}件)[/bold {p['primary']}]",
+                        border_style=p["border"],
+                        expand=True,
+                        show_lines=True
+                    )
+                    wf_table.add_column("No", style="bold cyan", width=4, justify="center")
+                    wf_table.add_column("ワークフロー名", style="bold yellow", width=26)
+                    wf_table.add_column("目標パターン", style="white")
+                    wf_table.add_column("Steps", style="green", width=6, justify="center")
+                    wf_table.add_column("成功/失敗", style="bold magenta", width=10, justify="center")
+
+                    for idx, w in enumerate(wfs, start=1):
+                        wf_table.add_row(
+                            str(idx),
+                            str(w.get("name")),
+                            str(w.get("goal")),
+                            str(w.get("steps")),
+                            f"[green]{w.get('success')}[/green] / [red]{w.get('failures')}[/red]"
+                        )
+                    console.print()
+                    console.print(wf_table)
+                    console.print()
+                    continue
+
+                # デフォルト: AWMステータス・HUD
+                total_wf = stats.get("total_workflows", 0)
+                replays = stats.get("total_success_replays", 0)
+                saved_tok = stats.get("estimated_saved_tokens", 0)
+
+                awm_panel = Panel(
+                    f"[bold white]Agent Workflow Memory (AWM) 自律学習ステータス[/bold white]\n\n"
+                    f"[cyan]• 登録ワークフロー数:[/] [bold yellow]{total_wf}[/] 件\n"
+                    f"[cyan]• 実証済み再利用回数:[/] [bold green]{replays}[/] 回\n"
+                    f"[cyan]• 推定削減トークン数:[/] [bold magenta]{saved_tok:,}[/] tok (高速ショートカット実証)\n"
+                    f"[cyan]• ゴミ・ノイズ防護壁:[/] 多層重要度フィルター ＆ 品質ゲート常時稼働\n\n"
+                    f"[dim]サブコマンド: /awm list (一覧) | /awm purge (ゴミ掃除)[/dim]",
+                    title=f"[bold {p['primary']}]◈ AWM Cognitive Status ◈[/bold {p['primary']}]",
+                    border_style=p["border"]
+                )
+                console.print()
+                console.print(awm_panel)
+                console.print()
+                continue
+
             # 14.5 推論モデル切替 (/model)
             if user_input.startswith("/model"):
                 parts = user_input.split()

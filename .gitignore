@@ -13,6 +13,8 @@ htmlcov/
 *.log
 logs/*.log
 logs/*.pid
+data/*.pid
+*.pid
 logs/heartbeats.json
 logs/tools/
 

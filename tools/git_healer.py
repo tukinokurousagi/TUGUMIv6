@@ -84,7 +84,8 @@ class GitHealer:
                         return key
             except Exception:
                 pass
-        return os.environ.get("GEMINI_API_KEY", "")
+        from core.gemini_client import _resolve_gemini_api_key
+        return _resolve_gemini_api_key("")
 
     def _log(self, msg: str, level: str = "INFO"):
         """フォーマットされたログを出力"""

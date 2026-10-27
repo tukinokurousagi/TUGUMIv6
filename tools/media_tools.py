@@ -54,8 +54,9 @@ def _scan_media_file(filepath: str):
 
 
 def _get_genai_client() -> genai.Client:
-    """Gemini API クライアントを取得"""
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    """Gemini API クライアントを取得（非対話環境でも ~/.bashrc から確実に解決）"""
+    from core.gemini_client import _resolve_gemini_api_key
+    api_key = _resolve_gemini_api_key("")
     return genai.Client(api_key=api_key)
 
 

@@ -25,11 +25,32 @@ except ImportError:
     genai = None
     types = None
 
+def _resolve_gemini_api_key(explicit_key: str = "") -> str:
+    """環境変数または ~/.bashrc から GEMINI_API_KEY を確実に解決（cron等の非対話プロセス対応）"""
+    key = explicit_key or os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
+    if key:
+        return key
+    bashrc_path = os.path.expanduser("~/.bashrc")
+    if os.path.exists(bashrc_path):
+        try:
+            with open(bashrc_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if s.startswith("export GEMINI_API_KEY="):
+                        val = s.split("=", 1)[1].strip().strip('"').strip("'")
+                        if val:
+                            os.environ["GEMINI_API_KEY"] = val
+                            return val
+        except Exception:
+            pass
+    return ""
+
+
 class GeminiClient:
     """Robust Dual-Mode (SDK & REST) Gemini Client for TUGUMIv6"""
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         model: str = "gemini-3.8-flash",
         fallback_model: str = "gemini-3.8-flash",
         fallback_model_lite: str = "gemini-3.8-flash",
@@ -37,7 +58,7 @@ class GeminiClient:
         timeout: float = 300.0,
         max_retries: int = 1
     ):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
+        self.api_key = _resolve_gemini_api_key(api_key)
         self.model = model
         self.fallback_model = fallback_model
         self.fallback_model_lite = fallback_model_lite

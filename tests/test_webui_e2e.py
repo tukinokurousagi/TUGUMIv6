@@ -241,7 +241,6 @@ class TestWebUIFullE2E(unittest.TestCase):
         """Test deleting session with encoded characters and invalid IDs"""
         import urllib.parse
         # Create a session with special characters
-        special_id = "test-session-special-@#$ 123"
         res_create = self.client.post("/api/chat/sessions", json={"title": "特殊文字セッション"})
         self.assertEqual(res_create.status_code, 200)
         sid = res_create.json().get("session_id")

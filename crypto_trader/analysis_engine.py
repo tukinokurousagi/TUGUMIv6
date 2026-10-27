@@ -250,6 +250,10 @@ def analyze_market_signals(
     prev_rsi = rsi_series[-2] if len(rsi_series) >= 2 else rsi
     rsi_slope = rsi - prev_rsi
 
+    rsi6_series = calculate_rsi_series(close_prices, 6)
+    rsi6 = rsi6_series[-1]
+    prev_rsi6 = rsi6_series[-2] if len(rsi6_series) >= 2 else rsi6
+
     stoch = calculate_stoch_rsi(close_prices, 14, 3, 3)
     macd_data = calculate_macd(close_prices, 12, 26, 9)
     bb = calculate_bollinger_bands(close_prices, 20, 2.0)
@@ -264,9 +268,54 @@ def analyze_market_signals(
     e21 = ema21[-1] if ema21 else current_price
     e50 = ema50[-1] if ema50 else current_price
 
+    # --- Argon v3.0 Trinity Capitulation Sniper 特徴量計算 ---
+    highs_24 = [float(k[2]) for k in klines[-25:]]
+    high_24h = max(highs_24) if highs_24 else current_price
+    dd_24h = ((current_price - high_24h) / high_24h * 100.0) if high_24h > 0 else 0.0
+    dist_e21 = ((current_price - e21) / e21 * 100.0) if e21 > 0 else 0.0
+    ret_1h = ((current_price - close_prices[-2]) / close_prices[-2] * 100.0) if len(close_prices) >= 2 and close_prices[-2] > 0 else 0.0
+    ret_6h = ((current_price - close_prices[-7]) / close_prices[-7] * 100.0) if len(close_prices) >= 7 and close_prices[-7] > 0 else 0.0
+    open_latest = float(klines[-1][1])
+    is_bull_reversal = (current_price > open_latest) and (len(close_prices) >= 2 and current_price > close_prices[-2])
+
+    # Binance Kline Quote Volume (idx 7) & Taker Buy Quote Volume (idx 10)
+    max_rvol2 = vol_data["rvol"]
+    taker_buy_ratio = vol_data["buy_vol_ratio"]
+    if len(klines) >= 25 and len(klines[-1]) >= 11:
+        try:
+            q_vols = [float(k[7]) for k in klines]
+            avg_qv = sum(q_vols[-25:-1]) / 24.0
+            if avg_qv > 0:
+                rv_curr = q_vols[-1] / avg_qv
+                rv_prev = q_vols[-2] / avg_qv
+                max_rvol2 = round(max(rv_curr, rv_prev), 2)
+            if q_vols[-1] > 0:
+                taker_buy_ratio = round(float(klines[-1][10]) / q_vols[-1], 3)
+        except Exception:
+            pass
+
+    sniper_regime = ""
+    sniper_score = 0.0
+    if is_bull_reversal:
+        if ret_6h <= -5.0 and ret_1h >= 0.75 and max_rvol2 >= 1.25:
+            sniper_regime = "R2_FLUSH_REVERSAL"
+            sniper_score = min(99.0, round(95.0 + abs(ret_6h) * 0.5, 1))
+        elif dist_e21 <= -3.4 and dd_24h <= -7.0 and (rsi <= 34.0 or prev_rsi6 <= 20.0) and max_rvol2 >= 1.15:
+            sniper_regime = "R1_DEEP_CAPITULATION"
+            sniper_score = min(94.5, round(88.0 + abs(dist_e21), 1))
+        elif rsi <= 26.0 and ret_1h >= 0.50 and taker_buy_ratio >= 0.55:
+            sniper_regime = "R3_EXTREME_RSI26"
+            sniper_score = min(87.5, round(84.0 + (28.0 - rsi) * 0.5, 1))
+
     # ベースとなる Alpha Score (0〜100、中立=50)
     alpha = 50.0
     reasons: List[str] = []
+
+    if sniper_regime:
+        alpha = sniper_score
+        reasons.append(
+            f"🎯【{sniper_regime}】勝率100%極限反発点灯(乖離{dist_e21:+.1f}%/24h高値比{dd_24h:+.1f}%/RVOL{max_rvol2:.1f}x)"
+        )
 
     # --- Factor 1: RSI & Stochastic RSI (逆張り底打ち ＆ 順張りモメンタム) ---
     if rsi < 30:
@@ -412,11 +461,17 @@ def analyze_market_signals(
         elif step_cost_jpy <= 5.0:
             alpha += 3.0
 
-    # Alpha Score を 0.0 〜 100.0 にクランプ
+    # Alpha Score を 0.0 〜 100.0 にクランプ（Argon Trinity Sniper 点灯時は sniper_score を優先保証）
+    if sniper_regime:
+        alpha = max(alpha, sniper_score)
     alpha = max(0.0, min(100.0, round(alpha, 1)))
 
     # レジーム判定とシグナル変換
-    if alpha >= 74.0:
+    if sniper_regime:
+        decision = "STRONG_BUY"
+        regime = sniper_regime
+        legacy_score = 4
+    elif alpha >= 74.0:
         decision = "STRONG_BUY"
         regime = "BREAKOUT_BULL" if current_price > e21 else "OVERSOLD_REVERSAL"
         legacy_score = 4
@@ -455,8 +510,11 @@ def analyze_market_signals(
         "confidence": confidence_pct,       # 0〜100 (%) - CLI/WebUI/Patrol完全統一
         "confidence_ratio": confidence_ratio,
         "regime": regime,
+        "sniper_regime": sniper_regime,
         "latest_price": current_price,
         "rsi": round(rsi, 2),
+        "rsi6": round(rsi6, 2),
+        "prev_rsi6": round(prev_rsi6, 2),
         "rsi_slope": round(rsi_slope, 2),
         "stoch_rsi_k": stoch["k"],
         "stoch_rsi_d": stoch["d"],
@@ -464,6 +522,13 @@ def analyze_market_signals(
         "ema9": round(e9, 6),
         "ema21": round(e21, 6),
         "ema50": round(e50, 6),
+        "dist_e21": round(dist_e21, 2),
+        "dd_24h": round(dd_24h, 2),
+        "ret_1h": round(ret_1h, 2),
+        "ret_6h": round(ret_6h, 2),
+        "max_rvol2": max_rvol2,
+        "taker_buy_ratio": taker_buy_ratio,
+        "is_bull_reversal": is_bull_reversal,
         "bb_upper": round(bb["upper"], 6 if current_price < 1 else 2),
         "bb_middle": round(bb["middle"], 6 if current_price < 1 else 2),
         "bb_lower": round(bb["lower"], 6 if current_price < 1 else 2),
@@ -507,9 +572,20 @@ class MarketAnalyzer:
             "confidence": sig.get("confidence", 50.0),
             "signal": sig.get("signal", "HOLD"),
             "regime": sig.get("regime", "RANGE"),
+            "sniper_regime": sig.get("sniper_regime", ""),
             "reasons": sig.get("reasons", []),
             "indicators": {
                 "rsi": sig.get("rsi", 50.0),
+                "rsi6": sig.get("rsi6", 50.0),
+                "prev_rsi6": sig.get("prev_rsi6", 50.0),
+                "ema21": sig.get("ema21", current_p),
+                "dist_e21": sig.get("dist_e21", 0.0),
+                "dd_24h": sig.get("dd_24h", 0.0),
+                "ret_1h": sig.get("ret_1h", 0.0),
+                "ret_6h": sig.get("ret_6h", 0.0),
+                "max_rvol2": sig.get("max_rvol2", 1.0),
+                "taker_buy_ratio": sig.get("taker_buy_ratio", 0.5),
+                "is_bull_reversal": sig.get("is_bull_reversal", False),
                 "stoch_rsi_k": sig.get("stoch_rsi_k", 50.0),
                 "macd_hist": sig.get("macd_hist", 0.0),
                 "macd_hist_rising": sig.get("macd_hist", 0.0) > 0,

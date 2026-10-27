@@ -179,11 +179,14 @@ class TestLiveMultimodalE2E(unittest.TestCase):
         self.assertIn("isSpillover", html)
 
     def test_09_live_function_calling_tools_definition(self):
-        """Verify that all 7 function calling tools are properly configured for Gemini Live"""
+        """Verify that all 10 function calling tools are properly configured for Gemini Live"""
         with open(os.path.join(SCRIPT_DIR, "interfaces", "web", "web_server.py"), "r", encoding="utf-8") as f:
             server_src = f.read()
 
         expected_tools = [
+            "search_web_realtime",
+            "recall_tugumi_memory",
+            "generate_creative_media",
             "run_termux_command",
             "get_system_telemetry",
             "update_live_settings",
@@ -196,22 +199,23 @@ class TestLiveMultimodalE2E(unittest.TestCase):
             self.assertIn(f'"name": "{tool_name}"', server_src)
 
     def test_10_live_tool_execution_handlers(self):
-        """Verify the execution logic of live tools (telemetry, desk note, settings)"""
-        import asyncio
-        from unittest.mock import AsyncMock
-
-        # We can test tool handling logic in a lightweight isolated way
+        """Verify the execution logic of live tools (telemetry, desk note, settings) without polluting production DB"""
         from memory.sqlite_memory import SQLiteMemory
-        from interfaces.cli.token_cost_tracker import TokenCostTracker
 
         mem = SQLiteMemory()
-        tracker = TokenCostTracker()
+        orig_voice = mem.get_kv("live_voice", "Aoede")
+        orig_tone = mem.get_kv("live_tone", "standard")
 
-        # 1. Test update_live_settings storage
-        mem.set_kv("live_voice", "Kore")
-        self.assertEqual(mem.get_kv("live_voice"), "Kore")
-        mem.set_kv("live_tone", "formal")
-        self.assertEqual(mem.get_kv("live_tone"), "formal")
+        try:
+            # 1. Test update_live_settings storage with valid voice and tone
+            mem.set_kv("live_voice", "Kore")
+            self.assertEqual(mem.get_kv("live_voice"), "Kore")
+            mem.set_kv("live_tone", "sweet")
+            self.assertEqual(mem.get_kv("live_tone"), "sweet")
+        finally:
+            # Restore original voice and tone
+            mem.set_kv("live_voice", orig_voice if orig_voice else "Aoede")
+            mem.set_kv("live_tone", orig_tone if orig_tone in ("standard", "sweet", "energetic", "cool", "whisper") else "standard")
 
         # 2. Test desk note saving logic
         test_dir = "/storage/emulated/0/TUGUMIDesk/共有フォルダ"

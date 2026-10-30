@@ -1217,20 +1217,68 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
         reply = "🧹 **現在のチャットセッション履歴をクリアし、Antigravity常駐セッションをリフレッシュいたしました。**"
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id, "clear_session": True}
 
-    # 6. RAG検索 (/rag)
+    # 6. RAG管理＆検索 (/rag)
     if cmd == "/rag":
-        if not query:
-            reply = "📚 **使用方法**: `/rag <検索キーワードまたは質問>` (例: `/rag 乃木坂`, `/rag MCP 2.0`)"
-        else:
-            hits = rag.search_hybrid(query, top_k=3)
+        sub = args[0].lower() if args else ""
+        sub_query = " ".join(args[1:]).strip() if len(args) > 1 else ""
+
+        if sub in ("status", "info"):
+            summary = rag.get_status_summary()
+            reply = (
+                f"### 📚 ハイブリッドRAG ステータス\n\n"
+                f"- **インデックス済みファイル数**: `{summary.get('total_files', 0)}` 件\n"
+                f"- **総分割チャンク数**: `{summary.get('total_chunks', 0)}` チャンク\n"
+                f"- **3072次元ベクトル埋め込み**: `{summary.get('vector_embedded_chunks', 0)}` チャンク完備\n"
+                f"- **SQLite FTS5 インデックス**: `{summary.get('fts_indexed_chunks', 0)}` チャンク\n"
+                f"- **ナレッジ格納先**: `{summary.get('knowledge_dir', getattr(rag, 'knowledge_dir', ''))}`\n"
+            )
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        elif sub in ("list", "files"):
+            files = rag.list_indexed_files(folder_filter=sub_query if sub_query else None)
+            lines = [f"### 📚 ハイブリッドRAG ファイル一覧 (計 {len(files)} 件)\n"]
+            for f in files[:20]:
+                lines.append(f"- **{f.get('title', '無題')}** (フォルダ: `{f.get('folder', 'root')}`, チャンク: `{f.get('chunks', 0)}`, 3072d: {'✅' if f.get('has_3072d') else '⏳'})")
+            if len(files) > 20:
+                lines.append(f"\n*...他 {len(files) - 20} 件 (WebUIのRAGタブで全件閲覧可能)*")
+            reply = "\n".join(lines)
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        elif sub == "sync":
+            summary = rag.ingest_all(max_files=10000, force=False, embed_missing=False)
+            reply = f"🔄 **ハイブリッドRAG 同期完了**: `{summary.get('total_files', 0)}` ファイル / `{summary.get('total_chunks', 0)}` チャンクを同期しました。"
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        elif sub == "search":
+            search_target = sub_query
+            if not search_target:
+                reply = "📚 **使用方法**: `/rag search <キーワード>` (例: `/rag search 乃木坂`, `/rag search 井上和`)"
+                return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+            hits = rag.search_hybrid(search_target, top_k=5)
             if not hits:
-                reply = f"📚 **RAG検索結果**: 『{query}』に一致する知見は見つかりませんでした。"
+                reply = f"📚 **RAG検索結果**: 『{search_target}』に一致する知見は見つかりませんでした。"
             else:
                 snippets = []
                 for idx, h in enumerate(hits, 1):
                     snippets.append(f"- **{idx}. {h.get('title', '無題')}** `[スコア: {h.get('score', 0):.2f}]`\n  - {h.get('text', '')[:200]}...")
-                reply = f"### 📚 ハイブリッドRAG検索結果: 『{query}』\n\n" + "\n\n".join(snippets)
-        return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+                reply = f"### 📚 ハイブリッドRAG検索結果: 『{search_target}』\n\n" + "\n\n".join(snippets)
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        elif not query:
+            reply = (
+                "📚 **使用方法**:\n"
+                "- `/rag status` : ハイブリッドRAGのステータス・チャンク数を確認\n"
+                "- `/rag list` : インデックス済みファイル一覧を表示\n"
+                "- `/rag sync` : 最新ナレッジフォルダを再同期・埋め込み\n"
+                "- `/rag search <キーワード>` : ナレッジを直接高速検索\n"
+                "- `/rag <質問や指示>` : RAG知識をプロンプトに動的注入してAI回答（チャット本流）"
+            )
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        else:
+            # サブコマンドではなく自然言語指示（例: `/rag DARK TUGUMIの規約を踏まえて...`）の場合は、
+            # None を返して通常のチャット処理（Auto-RAGプロンプト注入フロー）へ渡す
+            return None
 
     # 7. SKILL一覧 (/skills, /skill) — スマホ最適化カードブロック形式
     if cmd in ("/skills", "/skill"):
@@ -2635,6 +2683,68 @@ async def api_rag_search(req: SearchRequest):
             "status": "ok",
             "results": results
         }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+@app.get("/api/rag/file/detail")
+async def api_rag_file_detail(path: Optional[str] = None, rel_path: Optional[str] = None, title: Optional[str] = None):
+    """指定されたRAGファイルの中身全文およびインデックス済みチャンク一覧を詳細取得（数字だけでなく中身を完全可視化）"""
+    try:
+        def _get_detail():
+            target_chunks = []
+            target_meta = {}
+            for c in rag.vector_store:
+                match = False
+                if path and c.get("file_path") == path:
+                    match = True
+                elif rel_path and (c.get("rel_path") == rel_path or c.get("rel_path", "").endswith(rel_path)):
+                    match = True
+                elif title and (c.get("title") == title or title in c.get("title", "")):
+                    match = True
+
+                if match:
+                    target_chunks.append({
+                        "source_chunk_id": c.get("source_chunk_id"),
+                        "text": rag._strip_chunk_header(c.get("text", "")),
+                        "has_vector": bool(c.get("embedding"))
+                    })
+                    if not target_meta:
+                        target_meta = {
+                            "file_path": c.get("file_path"),
+                            "rel_path": c.get("rel_path"),
+                            "folder": c.get("folder"),
+                            "title": c.get("title"),
+                            "file_ext": c.get("file_ext"),
+                            "file_size": c.get("file_size"),
+                            "mtime": c.get("mtime")
+                        }
+
+            full_text = ""
+            actual_path = target_meta.get("file_path") or path
+            if actual_path and os.path.exists(actual_path):
+                try:
+                    content, _ = rag.extract_document_content(actual_path, os.path.dirname(actual_path))
+                    full_text = content
+                except Exception as ex:
+                    full_text = f"ファイル読み込みエラー: {ex}"
+            elif target_chunks:
+                full_text = "\n\n".join(c["text"] for c in target_chunks)
+
+            if not target_meta and not full_text:
+                return {"status": "error", "error": "ファイルが見つかりません"}
+
+            return {
+                "status": "ok",
+                "meta": target_meta,
+                "full_text": full_text,
+                "total_chunks": len(target_chunks),
+                "chunks": target_chunks
+            }
+
+        res = await asyncio.to_thread(_get_detail)
+        if res.get("status") == "error":
+            return JSONResponse(status_code=404, content=res)
+        return res
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 

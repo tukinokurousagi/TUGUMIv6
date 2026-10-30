@@ -2474,6 +2474,25 @@
     </div>
   </div>
 
+  <!-- ━━ 📚 3072次元ハイブリッドRAG 資料プレビュー＆全文閲覧モーダル ━━ -->
+  <div class="drawer-overlay" id="ragDetailModalOverlay" onclick="A.closeRagModal()"></div>
+  <div class="hud-modal" id="ragDetailModal" style="width:min(96vw, 960px);max-width:960px;max-height:90vh;z-index:1000;border:1px solid rgba(0,240,255,0.45);box-shadow:0 12px 48px rgba(0,240,255,0.22)">
+    <div class="hud-modal-hdr" style="padding:10px 16px;background:rgba(3,7,18,0.96)">
+      <div class="hud-modal-title" style="min-width:0;flex:1;display:flex;align-items:center;gap:8px">
+        <span style="font-size:18px">📚</span>
+        <span id="ragModalTitle" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:13px;color:var(--cyan);font-weight:700">RAG 資料プレビュー</span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+        <button class="btn-mini" id="ragModalCopyBtn" onclick="A.copyRagContent()" style="border-color:#10b981;color:#10b981;font-weight:700">📋 本文コピー</button>
+        <button class="btn-mini" id="ragModalChatBtn" onclick="A.useRagInChatFromModal()" style="border-color:var(--cyan);color:var(--cyan);font-weight:700">💬 この資料でチャット</button>
+        <button class="drawer-close" onclick="A.closeRagModal()" title="閉じる">✕</button>
+      </div>
+    </div>
+    <div class="hud-modal-body" id="ragModalBody" style="padding:16px;max-height:calc(90vh - 70px);overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+      <div style="text-align:center;padding:30px;color:var(--muted);font-size:12px">資料を読み込んでいます...</div>
+    </div>
+  </div>
+
   <!-- 🎨 画像合成・編集スタジオ モーダル -->
   <div class="drawer-overlay" id="imageStudioModalOverlay" onclick="A.closeImageStudio()"></div>
   <div class="hud-modal" id="imageStudioModal" style="width:min(96vw, 920px);max-width:920px;max-height:90vh;z-index:1000">
@@ -5208,11 +5227,12 @@ const A=(()=>{
       all.forEach(r=>{const i=document.createElement('div');i.className='mi';
         const titleStr = r.title||r.subject||'無題';
         const roleBadge = r.role_label ? `<span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(0,240,255,0.12);color:var(--cyan);margin-right:4px">${esc(r.role_label)}</span>` : '';
+        const viewBtn = r.src==='RAG' ? `<button class="btn-mini" onclick="A.openRagFileDetail('${esc(r.rel_path||r.title||'').replace(/'/g,"\\'")}', '${esc(titleStr).replace(/'/g,"\\'")}', '${esc(r.file_path||'').replace(/'/g,"\\'")}')" style="border-color:#a855f7;color:#c084fc;font-weight:700">📖 中身を見る</button>` : '';
         const askBtn = `<button class="btn-mini" onclick="A.askWithRagTitle('${esc(titleStr).replace(/'/g,"\\'")}')" title="このナレッジを使ってチャット・タスクを実行">💬 チャットで活用</button>`;
         const delBtn = r.rowid ? `<button class="mem-del-btn" onclick="A.deleteKnowledgeItem(${r.rowid})">🗑️ 削除</button>` : '';
         i.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">'
           +'<div class="mt">'+roleBadge+esc(titleStr)+'</div>'
-          +'<div style="display:flex;gap:4px">'+askBtn+delBtn+'</div>'
+          +'<div style="display:flex;gap:4px">'+viewBtn+askBtn+delBtn+'</div>'
           +'</div>'
           +'<div class="mx">'+esc((r.clean_text||r.text||r.content||r.fact_content||'').substring(0,320))+'</div>'
           +'<div class="mm">'+r.src+(r.folder?' · 📁 '+esc(r.folder):'')+(r.score?' · スコア: '+(typeof r.score==='number'?r.score.toFixed(3):r.score):'')+'</div>';
@@ -5253,13 +5273,182 @@ const A=(()=>{
         const tStr=f.title||'無題';
         i.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">
           <div class="mt"><span style="color:var(--cyan)">${esc(f.role_label||'📘 知識')}</span> ${esc(tStr)}</div>
-          <button class="btn-mini" onclick="A.askWithRagTitle('${esc(tStr).replace(/'/g,"\\'")}')">💬 この資料で質問/タスク</button>
+          <div style="display:flex;gap:4px">
+            <button class="btn-mini" onclick="A.openRagFileDetail('${esc(f.rel_path||f.title||'').replace(/'/g,"\\'")}', '${esc(tStr).replace(/'/g,"\\'")}', '${esc(f.file_path||'').replace(/'/g,"\\'")}')" style="border-color:#a855f7;color:#c084fc;font-weight:700">📖 中身を見る</button>
+            <button class="btn-mini" onclick="A.askWithRagTitle('${esc(tStr).replace(/'/g,"\\'")}')">💬 この資料で質問/タスク</button>
+          </div>
         </div>
         <div class="mm">📁 フォルダ: <b>${esc(f.folder||'root')}</b> · チャンク数: <b>${f.chunks||0}</b> · 3072dベクトル: <b>${f.has_3072d?'✅ 完備':'⏳ FTS'}</b></div>`;
         c.appendChild(i);
       });
       toast(`RAGファイル: ${files.length}件を表示`,'ok');
     }catch(e){c.innerHTML='<div class="me">一覧取得エラー: '+e.message+'</div>'}
+  }
+
+  let currentRagDoc = null;
+  let currentRagActiveTab = 'preview';
+
+  async function openRagFileDetail(relPath, title, filePath){
+    const ov=$('#ragDetailModalOverlay'), md=$('#ragDetailModal');
+    if(!ov||!md)return;
+    ov.classList.add('open');
+    md.classList.add('open');
+    const displayTitle = title || relPath || 'RAG 資料詳細';
+    const titleEl = $('#ragModalTitle');
+    if(titleEl) titleEl.textContent = displayTitle;
+    const b = $('#ragModalBody');
+    if(b) b.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px"><span class="spin" style="display:inline-block;margin-right:8px">🌀</span>3072次元RAGナレッジと分割チャンクを読込中...</div>';
+
+    try{
+      const q = new URLSearchParams();
+      if(relPath) q.append('rel_path', relPath);
+      if(title) q.append('title', title);
+      if(filePath) q.append('path', filePath);
+
+      const r = await fetch('/api/rag/file/detail?' + q.toString());
+      const d = await r.json();
+      if(d.status === 'ok'){
+        currentRagDoc = d;
+        currentRagActiveTab = 'preview';
+        renderRagDetail();
+      }else{
+        if(b) b.innerHTML = `<div style="text-align:center;padding:30px;color:#ef4444;font-size:13px">❌ 読込エラー: ${esc(d.error||'ファイルが見つかりませんでした')}</div>`;
+      }
+    }catch(e){
+      if(b) b.innerHTML = `<div style="text-align:center;padding:30px;color:#ef4444;font-size:13px">❌ 通信エラー: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function closeRagModal(){
+    const ov=$('#ragDetailModalOverlay'), md=$('#ragDetailModal');
+    if(ov) ov.classList.remove('open');
+    if(md) md.classList.remove('open');
+  }
+
+  function switchRagTab(tabName){
+    currentRagActiveTab = tabName;
+    renderRagDetail();
+  }
+
+  function renderRagDetail(){
+    const b = $('#ragModalBody');
+    if(!b || !currentRagDoc) return;
+    const meta = currentRagDoc.meta || {};
+    const chunks = currentRagDoc.chunks || [];
+    const fullText = currentRagDoc.full_text || '';
+    const totalChars = fullText.length;
+    const lineCount = fullText ? fullText.split('\n').length : 0;
+
+    const navHtml = `
+      <div style="display:flex;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn-mini ${currentRagActiveTab==='preview'?'active':''}" onclick="A.switchRagTab('preview')" style="${currentRagActiveTab==='preview'?'background:rgba(0,240,255,0.2);border-color:var(--cyan);color:var(--cyan);font-weight:700':''}">📄 全文プレビュー (${totalChars.toLocaleString()}文字)</button>
+        <button class="btn-mini ${currentRagActiveTab==='chunks'?'active':''}" onclick="A.switchRagTab('chunks')" style="${currentRagActiveTab==='chunks'?'background:rgba(168,85,247,0.25);border-color:#a855f7;color:#c084fc;font-weight:700':''}">🧩 3072d 分割チャンク (${chunks.length}件)</button>
+        <button class="btn-mini ${currentRagActiveTab==='meta'?'active':''}" onclick="A.switchRagTab('meta')" style="${currentRagActiveTab==='meta'?'background:rgba(16,185,129,0.25);border-color:var(--green);color:var(--green);font-weight:700':''}">ℹ️ メタ情報</button>
+        <span style="margin-left:auto;font-size:11px;color:var(--muted)">📁 ${esc(meta.folder||'root')} · 3072d ベクトル: <b style="color:var(--cyan)">✅ 完備</b></span>
+      </div>
+    `;
+
+    let contentHtml = '';
+    if(currentRagActiveTab === 'preview'){
+      contentHtml = `
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:rgba(0,240,255,0.04);border-radius:6px;border:1px solid rgba(0,240,255,0.15);font-size:11.5px;color:#94a3b8">
+            <span>📊 <b>${lineCount.toLocaleString()}</b> 行 · <b>${totalChars.toLocaleString()}</b> 文字 · パス: <code style="color:var(--cyan)">${esc(meta.rel_path||meta.file_path||'')}</code></span>
+            <span style="font-size:11px;color:#10b981">✨ Markdown 実働レンダリング</span>
+          </div>
+          <pre style="max-height:calc(75vh - 120px);overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--font);font-size:13px;line-height:1.65;background:rgba(3,7,18,0.7);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);color:#e2e8f0;margin:0">${esc(fullText)}</pre>
+        </div>
+      `;
+    }else if(currentRagActiveTab === 'chunks'){
+      let chunkCards = '';
+      if(chunks.length === 0){
+        chunkCards = '<div style="text-align:center;padding:24px;color:var(--muted);font-size:12px">分割チャンクが存在しません</div>';
+      }else{
+        chunkCards = chunks.map((c, idx) => `
+          <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;font-family:var(--mono)">
+              <span style="color:#c084fc;font-weight:700">🧩 CHUNK #${idx + 1} <span style="color:var(--muted);font-weight:normal">(${esc(c.source_chunk_id || '')})</span></span>
+              <span style="padding:1px 6px;border-radius:4px;background:rgba(0,240,255,0.12);color:var(--cyan)">${c.has_vector ? '3072d 埋め込み済' : 'FTS インデックス'}</span>
+            </div>
+            <pre style="max-height:180px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11.5px;line-height:1.5;background:rgba(0,0,0,0.35);padding:10px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);color:#cbd5e1;margin:0">${esc(c.text||'')}</pre>
+          </div>
+        `).join('');
+      }
+
+      contentHtml = `
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="padding:8px 12px;background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.25);border-radius:6px;font-size:11.5px;color:#cbd5e1">
+            💡 <b>Gemini Embedding 2 (3072次元)</b> でベクトル化された分割単位です。ハイブリッドRAG検索時にコサイン類似度とSQLite FTS5のReciprocal Rank Fusion (RRF) で照合されます。
+          </div>
+          <div style="max-height:calc(75vh - 130px);overflow-y:auto;display:flex;flex-direction:column;gap:8px">
+            ${chunkCards}
+          </div>
+        </div>
+      `;
+    }else if(currentRagActiveTab === 'meta'){
+      const mtimeStr = meta.mtime ? new Date(meta.mtime * 1000).toLocaleString('ja-JP') : '不明';
+      const sizeStr = meta.file_size ? `${(meta.file_size / 1024).toFixed(1)} KB (${meta.file_size.toLocaleString()} bytes)` : '不明';
+      contentHtml = `
+        <div style="display:flex;flex-direction:column;gap:12px;font-size:12.5px">
+          <table style="width:100%;border-collapse:collapse;border:1px solid rgba(255,255,255,0.08);border-radius:8px;overflow:hidden">
+            <tbody>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">
+                <td style="padding:10px 14px;color:var(--muted);width:140px;font-weight:bold">ドキュメント名</td>
+                <td style="padding:10px 14px;color:var(--cyan);font-weight:bold">${esc(meta.title||'')}</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06)">
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">格納フォルダ</td>
+                <td style="padding:10px 14px;color:#e2e8f0">📁 ${esc(meta.folder||'root')}</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">相対パス</td>
+                <td style="padding:10px 14px;font-family:var(--mono);color:#94a3b8">${esc(meta.rel_path||'')}</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06)">
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">実機絶対パス</td>
+                <td style="padding:10px 14px;font-family:var(--mono);color:#94a3b8;word-break:break-all">${esc(meta.file_path||'')}</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">ファイル拡張子</td>
+                <td style="padding:10px 14px;color:#e2e8f0">${esc(meta.file_ext||'')}</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06)">
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">ファイルサイズ</td>
+                <td style="padding:10px 14px;color:#e2e8f0">${esc(sizeStr)}</td>
+              </tr>
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02)">
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">最終更新日時</td>
+                <td style="padding:10px 14px;color:#e2e8f0">${esc(mtimeStr)}</td>
+              </tr>
+              <tr>
+                <td style="padding:10px 14px;color:var(--muted);font-weight:bold">総分割チャンク数</td>
+                <td style="padding:10px 14px;color:#c084fc;font-weight:bold">${chunks.length} チャンク (3072d ベクトル化済)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    b.innerHTML = navHtml + contentHtml;
+  }
+
+  function copyRagContent(){
+    if(!currentRagDoc || !currentRagDoc.full_text){
+      toast('コピーするテキストがありません','err');
+      return;
+    }
+    navigator.clipboard.writeText(currentRagDoc.full_text).then(()=>{
+      toast('RAG資料の全文をクリップボードにコピーしました📋','ok');
+    }).catch(e=>{
+      toast('コピーに失敗しました: '+e.message,'err');
+    });
+  }
+
+  function useRagInChatFromModal(){
+    const title = (currentRagDoc && currentRagDoc.meta && currentRagDoc.meta.title) || ($('#ragModalTitle') ? $('#ragModalTitle').textContent : 'RAG資料');
+    closeRagModal();
+    askWithRagTitle(title);
   }
 
   function askWithRagTitle(title){
@@ -9067,7 +9256,7 @@ const A=(()=>{
     playVoiceSample,saveLiveSettings,reconnectLiveSession,
     loadAvatarSettings,uploadAvatar,resetAvatar,saveAvatarSettings,openAvatarSettings,
     loadTel,openLiveTelemetryModal,closeLiveTelemetryModal,runDoctorInspect,
-    loadMem,loadHist,searchMem,syncRagIndex,listRagFiles,askWithRagTitle,recallAssociativeMem,queryLearningGraph,addKnow,addMemoryFact,deleteMemoryItem,deleteKnowledgeItem,filterTier,triggerDecay,
+    loadMem,loadHist,searchMem,syncRagIndex,listRagFiles,askWithRagTitle,openRagFileDetail,closeRagModal,switchRagTab,copyRagContent,useRagInChatFromModal,recallAssociativeMem,queryLearningGraph,addKnow,addMemoryFact,deleteMemoryItem,deleteKnowledgeItem,filterTier,triggerDecay,
     loadTools,loadRunningTools,runTool,runToolBgDirect,stopTool,
     renderTools,selectToolCategory,filterTools,runToolPro,runToolHelp,
     generateBriefingDirect,showLatestBriefing,loadBriefingSchedules,addBriefingSchedule,deleteBriefingSchedule,

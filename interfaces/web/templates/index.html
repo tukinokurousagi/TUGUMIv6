@@ -1019,7 +1019,7 @@
       <button class="bp" id="btnCmdPalette" onclick="A.openCommandPalette()" title="🔍 Omni コマンドパレット (Ctrl+K / ⌘K): 全スキル・MCP・ツール・履歴を横断検索" style="background:rgba(0,240,255,.1);color:var(--cyan);border-color:rgba(0,240,255,.45);padding:3px 9px;font-size:10px;font-weight:700;display:flex;align-items:center;gap:5px">🔍 検索 <span class="cmd-kbd">⌘K</span></button>
       <div class="chip" id="rateChip" title="APIリクエストレート / サーキットブレーカー状態" style="font-size:10px;padding:3px 8px;display:flex;align-items:center;gap:4px">⚡ API: <span id="hApiRate">0/45</span></div>
       <button class="bp" id="btnServerShutdown" onclick="A.shutdownServer()" title="🔌 サーバー停止: WebUIを終了しポート8086を即座に解放" style="background:#334155;color:#f8fafc;border-color:#475569;padding:3px 8px;font-size:10px;font-weight:700;display:flex;align-items:center;gap:4px">⏻ 終了</button>
-      <button class="bp" id="btnEmergencyStop" onclick="A.emergencyStop()" title="🚨 緊急全停止: 全実行プロセスを強制終了しAPI通信を遮断" style="background:var(--red);color:#fff;border-color:var(--red);padding:3px 8px;font-size:10px;font-weight:700;display:flex;align-items:center;gap:4px">🚨 緊急停止</button>
+      <button class="bp" id="btnEmergencyStop" onclick="A.toggleEmergencyStop()" title="🚨 緊急全停止: 全実行プロセスを強制終了しAPI通信を遮断" style="background:var(--red);color:#fff;border-color:var(--red);padding:3px 8px;font-size:10px;font-weight:700;display:flex;align-items:center;gap:4px">🚨 緊急停止</button>
       <div class="chip" id="mChip" onclick="A.togMode()">🌸 表: つぐみ</div>
     </div>
   </header>
@@ -1132,6 +1132,7 @@
           <button class="chip-item" onclick="A.quickSend('拓磨様のための本日のインテリジェント・デイリーブリーフィングを作成してください。愛知県一宮市の天気・最新AI動向・推し活エンタメ・Termux稼働診断・アクションプランを網羅した最高峰レポートをTUGUMIDeskに保存してください。')" style="border-color:#f59e0b;color:#fbbf24;font-weight:700">☀️ デイリーブリーフィング</button>
           <button class="chip-item" onclick="A.openLiveTelemetryModal()" style="border-color:var(--cyan);color:var(--cyan);font-weight:700">🩺 実機HUD展開</button>
           <button class="chip-item" onclick="A.openCloneStudioDirect()" style="border-color:var(--pink);color:var(--pink);font-weight:700">🌐 サイトクローン</button>
+          <button class="chip-item" onclick="A.openDressupStudio()" style="border-color:#ff007f;color:#ff3399;font-weight:700">👗 AI美女着せ替え</button>
 
           <button class="chip-item" onclick="A.setInputPrompt('サイバーパンク風のBGMを作曲してMIDIとMP3で保存して')" style="border-color:#b026ff;color:#c084fc;font-weight:700">🎵 作曲</button>
           <button class="chip-item" onclick="A.setInputPrompt('サイバーパンク風の美麗なアイコン画像をImagen 3で生成して')" style="border-color:#38bdf8;color:#38bdf8;font-weight:700">🎨 画像生成</button>
@@ -1177,6 +1178,19 @@
           <button class="chip-item" onclick="A.insertCmd('/sync')">📲 /sync</button>
           <button class="chip-item" onclick="A.insertCmd('/clear')">🧹 /clear</button>
           <button class="chip-item" onclick="A.insertCmd('/help')">❓ /help</button>
+        </div>
+
+        <!-- 中断タスク即時再開ドック (スクロール位置に関係なくワンタップで再開可能) -->
+        <div id="resumeDock" style="display:none;padding:7px 12px;background:rgba(255,42,133,0.12);border-top:1px solid rgba(255,42,133,0.35);border-bottom:1px solid rgba(255,42,133,0.35);align-items:center;justify-content:space-between;gap:8px;font-size:11px">
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;flex:1">
+            <span style="color:#ff79c6;font-weight:700;white-space:nowrap">⏸ 中断中:</span>
+            <span id="resumeDockText" style="color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;opacity:.9"></span>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <button type="button" class="code-cbtn" style="border-color:var(--cyan);color:var(--cyan);font-weight:700" onclick="A.resumeInterruptedTask(true)" title="直前の指示をそのまま再実行">🔄 再試行</button>
+            <button type="button" class="code-cbtn" style="border-color:var(--green);color:var(--green);font-weight:700" onclick="A.resumeInterruptedTask(false)" title="直前の指示を入力欄に復元して編集">✏️ 復元</button>
+            <button type="button" class="code-cbtn" style="border-color:var(--muted);color:var(--muted);padding:2px 6px" onclick="A.dismissInterruptedTask()" title="閉じる">✕</button>
+          </div>
         </div>
 
         <div class="ibar">
@@ -1239,10 +1253,23 @@
       <!-- メモリ -->
       <div class="pnl" id="p-mem"><div class="mp">
         <div class="sbar" style="flex-wrap:wrap;gap:6px">
-          <input class="sinp" id="mSI" placeholder="知識・記憶・エンティティを検索..." onkeydown="if(event.key==='Enter')A.searchMem()" style="min-width:180px;flex:1">
+          <input class="sinp" id="mSI" placeholder="知識・記憶・RAGファイル・エンティティを検索..." onkeydown="if(event.key==='Enter')A.searchMem()" style="min-width:180px;flex:1">
           <button class="sbtn" onclick="A.searchMem()" title="RAG + FTS5 + メモリ横断検索">🔍 統合検索</button>
+          <button class="sbtn" onclick="A.listRagFiles('')" title="インデックス済みのTUGUMI_RAGファイル一覧を表示" style="background:rgba(0,240,255,.15);border:1px solid var(--cyan);color:var(--cyan)">📂 RAG一覧</button>
+          <button class="sbtn" onclick="A.syncRagIndex()" title="TUGUMI_RAGフォルダをスキャンしてインデックスを最新化" style="background:rgba(245,158,11,.18);border:1px solid #f59e0b;color:#fbbf24">🔄 RAG同期</button>
           <button class="sbtn" onclick="A.recallAssociativeMem()" title="エビングハウス忘却曲線・重要度重み付き連想リコール" style="background:rgba(168,85,247,.2);border:1px solid #a855f7;color:#c084fc">🧠 連想リコール</button>
           <button class="sbtn" onclick="A.queryLearningGraph()" title="知識グラフから関連エンティティ・関係性を探索" style="background:rgba(16,185,129,.2);border:1px solid var(--green);color:var(--green)">🕸️ 知識グラフ</button>
+        </div>
+        <div id="ragStatusCard" class="kf" style="margin-bottom:10px;background:rgba(0,240,255,0.05);border:1px solid rgba(0,240,255,0.25);padding:10px 14px;border-radius:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+            <div style="font-size:12px;font-weight:bold;color:var(--cyan)">📚 3072次元ハイブリッドRAG ナレッジエンジン (Auto-RAG連動中)</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn-mini" onclick="A.listRagFiles('成功例')">✨ 成功例お手本</button>
+              <button class="btn-mini" onclick="A.listRagFiles('失敗例')">⚠️ 反面教師</button>
+              <button class="btn-mini" onclick="A.listRagFiles('')">📂 全ファイル</button>
+            </div>
+          </div>
+          <div id="ragStatusRow" style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:#cbd5e1;flex-wrap:wrap">RAGステータス読込中...</div>
         </div>
         <div class="kf">
           <div class="sc-h"><span class="sc-t">📚 ナレッジ（FTS5・RAG）追加</span></div>
@@ -1390,6 +1417,118 @@
           </div>
         </div>
 
+        <!-- ━━ 👗 AI美女 顔立ち完全固定・着せ替えスタジオ (Takuma Spec) ━━ -->
+        <div class="clone-studio-card" id="dressupStudioCard" style="border-color:rgba(255,0,128,0.4);box-shadow:0 0 25px rgba(255,0,128,0.12);margin-bottom:14px">
+          <div class="sc-h" style="margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="sc-t" style="color:var(--pink);font-size:13px">👗 AI美女 顔立ち完全固定・着せ替えスタジオ (Dressup Studio)</span>
+              <span class="sc-s on" style="font-size:9px;background:rgba(255,0,128,0.2);color:#ff3399;border:1px solid #ff007f">Gemini 3.1 Face-Lock &amp; 8大方程式</span>
+            </div>
+            <button class="btn-mini" onclick="A.loadDressupReferences(true)" title="リファレンス最新更新">🔄 候補更新</button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.5">
+            お気に入りの顔立ち（骨格・目元・涙袋・生体テクスチャ）を100%固定し、夏祭り浴衣・セーラー制服・白ニット等の衣装や背景・ポーズへの着せ替えをワンタップで自在に実行します。
+          </div>
+
+          <!-- Step 1: リファレンス画像選択 -->
+          <div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:var(--rs);padding:10px;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <span style="font-size:11px;font-weight:700;color:var(--cyan)">【Step 1】リファレンス画像（お気に入りの顔立ち）</span>
+              <span id="refSelectionBadge" style="font-size:9px;color:var(--green);font-family:var(--mono)">✔ 選択中</span>
+            </div>
+            
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+              <button class="bp" id="btnRefLatestSs" style="flex:1;min-width:140px;padding:5px 8px;font-size:10px;background:rgba(0,240,255,.15);border:1px solid var(--cyan);color:var(--cyan);font-weight:700" onclick="A.selectDressupRef('latest_ss')">📸 最新スクショを使用</button>
+              <button class="bp" id="btnRefGold" style="flex:1;min-width:140px;padding:5px 8px;font-size:10px;background:rgba(255,215,0,.15);border:1px solid var(--gold);color:var(--gold);font-weight:700" onclick="A.selectDressupRef('gold')">⭐ 金型モデル (黄金比)</button>
+              <button class="bp" style="flex:1;min-width:120px;padding:5px 8px;font-size:10px;background:rgba(255,255,255,.08);border:1px solid var(--bdr);color:var(--txt)" onclick="$('#dressupFileInput').click()">📁 端末画像アップロード</button>
+              <button class="bp" style="flex:1;min-width:140px;padding:5px 8px;font-size:10px;background:linear-gradient(90deg, #b026ff, #ff007f);color:#fff;font-weight:700" onclick="A.createFreshModelDirect()">✨ 新規清楚美女を創成</button>
+              <input type="file" id="dressupFileInput" accept="image/*" style="display:none" onchange="A.handleDressupFileSelect(this.files)">
+            </div>
+
+            <!-- 選択中リファレンスプレビュー表示 -->
+            <div id="dressupActiveRefContainer" style="display:flex;align-items:center;gap:10px;background:rgba(0,0,0,.4);border:1px solid var(--bdr);border-radius:6px;padding:8px">
+              <img id="dressupActiveRefThumb" src="/api/media/file/image/ref_model_closeup.png" style="width:64px;height:64px;object-fit:cover;border-radius:4px;border:1px solid var(--pink);flex-shrink:0" alt="Ref Thumb">
+              <div style="flex:1;min-width:0">
+                <div id="dressupActiveRefName" style="font-size:11px;font-weight:700;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">ref_model_closeup.png</div>
+                <div id="dressupActiveRefPath" style="font-size:9px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/storage/emulated/0/TUGUMIDesk/Images/ref_model_closeup.png</div>
+                <div style="display:flex;gap:8px;margin-top:4px;align-items:center">
+                  <label style="font-size:9px;color:var(--cyan);display:flex;align-items:center;gap:4px;cursor:pointer">
+                    <input type="checkbox" id="dressupAutoCropCb" checked style="accent-color:var(--cyan)"> 上下黒帯自動カット (スマホスクショ最適化)
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: 衣装・背景・ポーズの選択＆入力 -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:10px;margin-bottom:10px">
+            <!-- 衣装 (Outfit) -->
+            <div style="background:rgba(0,0,0,.25);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px">
+              <label style="font-size:10px;font-weight:700;color:var(--pink);margin-bottom:4px;display:block">👗 衣装 (Outfit) プリセット:</label>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', '白の夏用セーラー服、紺色のセーラー襟と胸元のリボンタイ、プリーツスカート')">🌸 夏セーラー制服</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', '清楚なネイビーのブレザー制服、チェック柄プリーツスカート、白シャツとリボン')">🏫 清楚ブレザー</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', '藍色の朝顔柄が描かれた上質な白地コットン浴衣、コーラルピンクの帯')">🎆 朝顔柄浴衣</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', 'ざっくり編まれたオーバーサイズの白いリブニットセーター、片方の肩が少し出たリラックス部屋着')">🧶 白オフショルニット</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', '風になびくシンプルな白のリネンワンピース、清楚なデコルテライン')">👗 白リネンワンピ</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', '洗練されたライトグレーのオフィススーツジャケット、シルクブラウス')">💼 オフィススーツ</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('outfit', 'エレガントな黒のレースキャミソールドレス、華奢なストラップ')">✨ ブラックドレス</button>
+              </div>
+              <input id="dressupOutfitIn" class="clone-input" placeholder="着せたい衣装（例: 白の夏用セーラー服...）" value="藍色の朝顔柄が描かれた上質な白地コットン浴衣、コーラルピンクの帯">
+            </div>
+
+            <!-- 背景・ロケーション (Background) -->
+            <div style="background:rgba(0,0,0,.25);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px">
+              <label style="font-size:10px;font-weight:700;color:var(--cyan);margin-bottom:4px;display:block">🏞️ 背景・ロケーション (Background) プリセット:</label>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+                <button class="btn-mini" onclick="A.setDressupPreset('bg', '夕暮れの夏祭り、温かい提灯の光の玉ボケ、神社の境内、賑やかな露店の灯り')">🏮 夏祭り・提灯</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('bg', '放課後の夕暮れの教室、木製の学習机に差し込む温かいオレンジ色の斜光、ノスタルジックな空気感')">🏫 放課後の教室</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('bg', '木漏れ日あふれるおしゃれな代官山カフェテラス、観葉植物と柔らかな自然光')">☕ カフェテラス</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('bg', '夏の湘南・江の島の海岸、爽やかな青空と白い波しぶき、心地よい潮風')">🌊 湘南の海岸</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('bg', '冬の表参道のきらめくイルミネーション夜景、光の玉ボケと澄んだ空気')">🌃 表参道イルミ</button>
+                <button class="btn-mini" onclick="A.setDressupPreset('bg', '朝の柔らかな光が差し込む白いベッドルーム、清潔なリネンシーツ')">🛏️ 朝の部屋</button>
+              </div>
+              <input id="dressupBgIn" class="clone-input" placeholder="背景シチュエーション（例: 夕暮れの夏祭り...）" value="夕暮れの夏祭り、温かい提灯の光の玉ボケ、神社の境内、賑やかな露店の灯り">
+            </div>
+          </div>
+
+          <!-- 表情・ポーズ (Pose) -->
+          <div style="background:rgba(0,0,0,.25);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px;margin-bottom:10px">
+            <label style="font-size:10px;font-weight:700;color:var(--yellow);margin-bottom:4px;display:block">😊 表情・ポーズ (Pose &amp; Expression) プリセット:</label>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+              <button class="btn-mini" onclick="A.setDressupPreset('pose', 'カメラを優しく見つめながら少し照れたように微笑む、愛らしい視線')">😊 照れ笑い・見つめる</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('pose', '両手でアイスラテのグラスを持ちながらストロー越しに微笑む、彼氏目線スナップ')">☕ アイスラテを持つ</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('pose', 'テーブルに頬杖をつき、いたずらっぽく小首をかしげて見つめる表情')">🤔 頬杖・小首をかしげる</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('pose', '微風で揺れる前髪を細い指先でそっと耳にかける自然な仕草')">🍃 髪を耳にかける</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('pose', '浴衣の袖を軽く押さえながらふと振り返る情緒的な瞬間')">👘 袖を押さえ振り返る</button>
+            </div>
+            <input id="dressupPoseIn" class="clone-input" placeholder="ポーズや表情（例: カメラを優しく見つめながら少し照れたように微笑む）" value="カメラを優しく見つめながら少し照れたように微笑む、愛らしい視線">
+          </div>
+
+          <!-- 実行アクションボタン -->
+          <button class="bp" id="btnExecuteDressup" style="width:100%;padding:10px;font-size:12px;font-weight:700;background:linear-gradient(90deg, #ff007f, #00f0ff);color:#000;box-shadow:0 0 20px rgba(255,0,128,.35);margin-bottom:10px" onclick="A.executeDressupDirect()">
+            👗 Gemini 3.1 で顔立ち固定・着せ替えを実行
+          </button>
+
+          <!-- 実行中プログレスインジケーター -->
+          <div id="dressupLoading" class="hid" style="text-align:center;padding:16px;background:rgba(0,0,0,.4);border-radius:var(--rs);border:1px solid var(--pink);margin-bottom:10px">
+            <div class="spn" style="margin:0 auto 10px;width:24px;height:24px"></div>
+            <div style="font-size:11px;color:var(--pink);font-weight:700">Gemini 3.1 Flash Image が顔立ち完全固定・着せ替えをレンダリング中...</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:4px">Character DNA保持・Sony A7R V 85mm GM 8大光学物理シミュレーションを適用中</div>
+          </div>
+
+          <!-- 生成結果プレビューエリア -->
+          <div id="dressupResultArea" class="hid" style="background:rgba(0,0,0,.35);border:1px solid var(--green);border-radius:var(--rs);padding:12px;text-align:center;margin-bottom:10px">
+            <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:8px">🎉 顔立ち固定・着せ替え画像が完成しました！</div>
+            <img id="dressupResultImg" src="" style="max-height:360px;max-width:100%;border-radius:8px;border:1px solid var(--bdr);box-shadow:0 0 20px rgba(0,255,136,.25)">
+            <div id="dressupResultMeta" style="font-size:10px;color:var(--muted);margin:8px 0"></div>
+            <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+              <a id="dressupDownloadLink" href="" target="_blank" class="bp" style="padding:6px 14px;font-size:10px;background:var(--green);color:#000;font-weight:700;text-decoration:none">🔍 フルサイズ表示・保存</a>
+              <button class="bp" id="btnDressupSetNewRef" style="padding:6px 14px;font-size:10px;background:rgba(0,240,255,.2);border:1px solid var(--cyan);color:var(--cyan);font-weight:700" onclick="A.setDressupResultAsNewRef()">📸 この顔を新リファレンスにセット</button>
+            </div>
+          </div>
+        </div>
+
         <!-- 🎬 AI クリエイティブ＆ブリーフィング スタジオ (直感操作HUD) -->
         <div class="sg" style="margin-bottom:12px;background:rgba(255,255,255,.02);border:1px solid rgba(0,240,255,.2);border-radius:var(--rm);padding:12px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -1419,7 +1558,10 @@
             <div style="background:rgba(0,0,0,.3);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
                 <div style="font-size:11px;font-weight:700;color:var(--pink)">🎨 AI 画像＆実写スタジオ (Gemini 3)</div>
-                <button class="bp" style="padding:2px 6px;font-size:9px;background:var(--pink);color:#000;font-weight:700" onclick="A.openImageStudio()">🎭 合成・編集スタジオ</button>
+                <div style="display:flex;gap:4px">
+                  <button class="bp" style="padding:2px 6px;font-size:9px;background:#ff007f;color:#fff;font-weight:700" onclick="A.openDressupStudio()">👗 着せ替え</button>
+                  <button class="bp" style="padding:2px 6px;font-size:9px;background:var(--pink);color:#000;font-weight:700" onclick="A.openImageStudio()">🎭 合成・編集</button>
+                </div>
               </div>
               <input id="imagePromptIn" placeholder="例: 表参道カフェで微笑む22歳清楚系モデル" style="width:100%;margin-bottom:6px;padding:4px 8px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:10px;outline:none">
               <div style="display:flex;gap:4px">
@@ -2347,6 +2489,7 @@
     <div class="hud-modal-body" style="padding:16px;max-height:calc(90vh - 70px);overflow-y:auto;display:flex;flex-direction:column;gap:12px">
       <!-- モード選択タブ -->
       <div style="display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--bdr);padding-bottom:8px">
+        <button class="bp" id="studioTabDressup" style="flex:1 1 auto;min-width:140px;white-space:nowrap;padding:6px 10px;font-size:11px;font-weight:700" onclick="A.setStudioMode('dressup')">👗 顔立ち固定・着せ替え (Dressup)</button>
         <button class="bp" id="studioTabCompose" style="flex:1 1 auto;min-width:140px;white-space:nowrap;padding:6px 10px;font-size:11px;font-weight:700;background:var(--cyan);color:#000" onclick="A.setStudioMode('compose')">🎭 複数画像合成 (Fusion)</button>
         <button class="bp" id="studioTabEdit" style="flex:1 1 auto;min-width:140px;white-space:nowrap;padding:6px 10px;font-size:11px;font-weight:700" onclick="A.setStudioMode('edit')">🖼️ プロンプト画像編集 (Edit)</button>
         <button class="bp" id="studioTabPhoto" style="flex:1 1 auto;min-width:140px;white-space:nowrap;padding:6px 10px;font-size:11px;font-weight:700" onclick="A.setStudioMode('photo')">📸 超リアル実写ポートレート</button>
@@ -2363,6 +2506,62 @@
 
         <!-- 選択中画像サムネイルプレビュー -->
         <div id="studioThumbnails" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px"></div>
+      </div>
+
+      <!-- 👗 着せ替え専用コントロール (dressupモード時表示) -->
+      <div id="studioDressupControls" class="hid" style="display:flex;flex-direction:column;gap:8px">
+        <div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,0,128,.3);border-radius:var(--rs);padding:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--pink);margin-bottom:6px">【Step 1】リファレンス画像選択（固定する顔立ち）:</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+            <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(0,240,255,.15);border:1px solid var(--cyan);color:var(--cyan);font-weight:700" onclick="A.selectDressupRef('latest_ss')">📸 最新スクショ</button>
+            <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(255,215,0,.15);border:1px solid var(--gold);color:var(--gold);font-weight:700" onclick="A.selectDressupRef('gold')">⭐ 金型モデル</button>
+            <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(255,255,255,.08);border:1px solid var(--bdr);color:var(--txt)" onclick="$('#studioFileInput').click()">📁 端末から選択</button>
+          </div>
+          <div id="studioDressupRefPreview" style="display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.4);border:1px solid var(--bdr);border-radius:4px;padding:6px">
+            <img id="studioDressupRefThumb" src="/api/media/file/image/ref_model_closeup.png" style="width:50px;height:50px;object-fit:cover;border-radius:4px;border:1px solid var(--pink)" alt="Ref">
+            <div style="flex:1;min-width:0;font-size:10px">
+              <div id="studioDressupRefName" style="color:var(--txt);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">ref_model_closeup.png</div>
+              <label style="font-size:9px;color:var(--cyan);display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:4px">
+                <input type="checkbox" id="studioDressupCropCb" checked style="accent-color:var(--cyan)"> 上下黒帯自動トリミング
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px">
+          <div style="background:rgba(0,0,0,.25);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px">
+            <label style="font-size:10px;font-weight:700;color:var(--pink);display:block;margin-bottom:4px">👗 衣装 (Outfit):</label>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+              <button class="btn-mini" onclick="A.setDressupPreset('outfit', '白の夏用セーラー服、紺色のセーラー襟と胸元のリボンタイ、プリーツスカート')">🌸 セーラー</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('outfit', '清楚なネイビーのブレザー制服、チェック柄プリーツスカート、白シャツとリボン')">🏫 ブレザー</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('outfit', '藍色の朝顔柄が描かれた上質な白地コットン浴衣、コーラルピンクの帯')">🎆 浴衣</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('outfit', 'ざっくり編まれたオーバーサイズの白いリブニットセーター、片方の肩が少し出たリラックス部屋着')">🧶 白ニット</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('outfit', '風になびくシンプルな白のリネンワンピース、清楚なデコルテライン')">👗 ワンピ</button>
+            </div>
+            <input id="studioOutfitIn" class="clone-input" placeholder="着せたい衣装..." value="藍色の朝顔柄が描かれた上質な白地コットン浴衣、コーラルピンクの帯">
+          </div>
+          <div style="background:rgba(0,0,0,.25);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px">
+            <label style="font-size:10px;font-weight:700;color:var(--cyan);display:block;margin-bottom:4px">🏞️ 背景 (Background):</label>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+              <button class="btn-mini" onclick="A.setDressupPreset('bg', '夕暮れの夏祭り、温かい提灯の光の玉ボケ、神社の境内、賑やかな露店の灯り')">🏮 夏祭り</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('bg', '放課後の夕暮れの教室、木製の学習机に差し込む温かいオレンジ色の斜光、ノスタルジックな空気感')">🏫 教室</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('bg', '木漏れ日あふれるおしゃれな代官山カフェテラス、観葉植物と柔らかな自然光')">☕ カフェ</button>
+              <button class="btn-mini" onclick="A.setDressupPreset('bg', '夏の湘南・江の島の海岸、爽やかな青空と白い波しぶき、心地よい潮風')">🌊 海岸</button>
+            </div>
+            <input id="studioBgIn" class="clone-input" placeholder="背景ロケーション..." value="夕暮れの夏祭り、温かい提灯の光の玉ボケ、神社の境内、賑やかな露店の灯り">
+          </div>
+        </div>
+
+        <div style="background:rgba(0,0,0,.25);border:1px solid var(--bdr);border-radius:var(--rs);padding:8px">
+          <label style="font-size:10px;font-weight:700;color:var(--yellow);display:block;margin-bottom:4px">😊 表情・ポーズ (Pose):</label>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+            <button class="btn-mini" onclick="A.setDressupPreset('pose', 'カメラを優しく見つめながら少し照れたように微笑む、愛らしい視線')">😊 照れ笑い</button>
+            <button class="btn-mini" onclick="A.setDressupPreset('pose', '両手でアイスラテのグラスを持ちながらストロー越しに微笑む、彼氏目線スナップ')">☕ ラテ持ち</button>
+            <button class="btn-mini" onclick="A.setDressupPreset('pose', 'テーブルに頬杖をつき、いたずらっぽく小首をかしげて見つめる表情')">🤔 頬杖</button>
+            <button class="btn-mini" onclick="A.setDressupPreset('pose', '微風で揺れる前髪を細い指先でそっと耳にかける自然な仕草')">🍃 髪かけ</button>
+          </div>
+          <input id="studioPoseIn" class="clone-input" placeholder="表情・ポーズ..." value="カメラを優しく見つめながら少し照れたように微笑む、愛らしい視線">
+        </div>
       </div>
 
       <!-- プロンプト入力エリア -->
@@ -2690,7 +2889,7 @@ const A=(()=>{
     loadThinkingLevel();
     loadModel();
     loadTel();loadSpr();loadBinanceDashboard(false);loadMem();loadHist();loadTools();loadRunningTools();loadClonedSites();
-    loadSkills(false);loadMcp(false);loadFpfStatus(false);loadMediaGallery(false);loadBriefingSchedules();
+    loadSkills(false);loadMcp(false);loadFpfStatus(false);loadMediaGallery(false);loadBriefingSchedules();loadDressupReferences(false);
     initSessions();
     checkRateStatus();
     initActivityStream();
@@ -2954,6 +3153,7 @@ const A=(()=>{
   async function send(){
     const ta=$('#cIn'),text=ta.value.trim();if(!text||st.streaming)return;
     st.lastUserPrompt=text;
+    dismissInterruptedTask();
     ta.value='';ta.style.height='auto';
     appendMsg('u',text);const el=appendMsg('a',null,true);
     st.streaming=true;$('#bS').classList.add('hid');$('#bX').classList.remove('hid');
@@ -2982,11 +3182,13 @@ const A=(()=>{
         for(const p of pts){const tr=p.trim();if(!tr.startsWith('data: '))continue;
           try{const ev=JSON.parse(tr.substring(6));
             if(ev.type==='thought'){
+              const typEl=ce.querySelector('.typing');if(typEl)typEl.remove();
               if(!tw){tw=document.createElement('div');tw.className='tw';
                 tw.innerHTML='<div class="tw-t" onclick="this.parentElement.classList.toggle(\'open\')"><span class="arr">▶</span> 🧠 思考プロセス <span style="margin-left:auto;font-size:8px;color:var(--cyan)">LIVE</span></div><div class="tw-b"></div>';
-                ce.innerHTML='';ce.appendChild(tw)}
+                ce.appendChild(tw)}
               aTh+=ev.content;tw.querySelector('.tw-b').textContent=aTh;tw.classList.add('open');
             }else if(ev.type==='tool_call'){
+              const typEl=ce.querySelector('.typing');if(typEl)typEl.remove();
               if(!tl){tl=document.createElement('div');tl.style.cssText='display:flex;flex-direction:column;gap:4px;margin:4px 0';ce.appendChild(tl)}
               const det=document.createElement('details');
               det.className='tool-insp';
@@ -3004,10 +3206,25 @@ const A=(()=>{
                 const bdEl=last.querySelector('.tr-body');if(bdEl){bdEl.textContent+=('\nResult: '+(ev.content||'OK'));}
               }
             }else if(ev.type==='rag'){
-              const rb=document.createElement('span');rb.className='rag-b';
-              rb.textContent='📚 RAG: '+ev.hits+'件ヒット';ce.appendChild(rb);
+              const typEl=ce.querySelector('.typing');if(typEl)typEl.remove();
+              const rDet=document.createElement('details');
+              rDet.className='rag-insp';
+              rDet.style.cssText='background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.35);border-radius:6px;padding:4px 8px;margin-bottom:6px;font-size:10px';
+              const titles=(ev.titles||[]).map(t=>esc(t)).join(' / ');
+              const srcs=ev.sources||[];
+              let srcHtml='';
+              srcs.forEach(s=>{
+                srcHtml+=`<div style="margin-top:4px;padding:5px 7px;background:rgba(0,0,0,0.45);border-radius:4px;border-left:2px solid var(--green)">`
+                  +`<div style="font-weight:700;color:#e2e8f0">${esc(s.role_label||'📘 知識')} <span style="color:var(--cyan)">[${esc(s.folder||'root')}]</span> ${esc(s.title||'無題')} <span style="color:#94a3b8;font-family:var(--mono)">(score: ${s.score||0})</span></div>`
+                  +`<div style="color:#94a3b8;margin-top:2px;white-space:pre-wrap">${esc(s.snippet||'')}</div></div>`;
+              });
+              rDet.innerHTML=`<summary style="cursor:pointer;color:#34d399;font-weight:700;font-family:var(--mono)">📚 Auto-RAG 参照: ${ev.hits}件 (${titles||'ナレッジ注入済'})</summary>`
+                +(srcHtml||`<div style="margin-top:4px;color:#cbd5e1">${titles}</div>`);
+              ce.appendChild(rDet);
             }else if(ev.type==='text'){
-              if(ft){if(!tw&&!tl)ce.innerHTML='';te=document.createElement('div');ce.appendChild(te);ft=false;
+              if(ft){
+                const typEl=ce.querySelector('.typing');if(typEl)typEl.remove();
+                te=document.createElement('div');ce.appendChild(te);ft=false;
                 if(tw){tw.classList.remove('open');tw.querySelector('.tw-t').innerHTML='<span class="arr">▶</span> 🧠 思考 ('+aTh.length+'文字)'}}
               aT+=ev.content;
               scheduleRender();
@@ -3053,11 +3270,12 @@ const A=(()=>{
       loadSessions(false);
     }catch(err){
       if(err.name==='AbortError'){
-        toast('推論を中断しました','inf');
+        toast('推論を中断しました。再開バーから直前の指示を再試行・復元できます','inf');
         try{localStorage.setItem('tugumi_interrupted_prompt', text);}catch(e){}
+        showResumeDock(text);
         const recBar = document.createElement('div');
         recBar.style.cssText = 'margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(255,0,85,0.08);border:1px solid rgba(255,0,85,0.3);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px';
-        recBar.innerHTML = '<span style="color:#ff79c6;font-weight:700">⏸ タスク中断済（直前の指示を保護しました）</span><div style="display:flex;gap:6px"><button type="button" class="code-cbtn" style="border-color:var(--cyan);color:var(--cyan)" onclick="const p=localStorage.getItem(\'tugumi_interrupted_prompt\')||\'\';if(p){document.getElementById(\'cIn\').value=p;A.send();}">🔄 そのまま再試行</button><button type="button" class="code-cbtn" onclick="const p=localStorage.getItem(\'tugumi_interrupted_prompt\')||\'\';const inp=document.getElementById(\'cIn\');if(inp){inp.value=p;inp.focus();}">✏️ 指示を編集して再開</button></div>';
+        recBar.innerHTML = '<span style="color:#ff79c6;font-weight:700">⏸ タスク中断済（直前の指示を保護しました）</span><div style="display:flex;gap:6px"><button type="button" class="code-cbtn" style="border-color:var(--cyan);color:var(--cyan);font-weight:700" onclick="A.resumeInterruptedTask(true)">🔄 そのまま再試行</button><button type="button" class="code-cbtn" style="border-color:var(--green);color:var(--green);font-weight:700" onclick="A.resumeInterruptedTask(false)">✏️ 指示を復元して再開</button></div>';
         ce.appendChild(recBar);
       }
       else{try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -3090,6 +3308,62 @@ const A=(()=>{
   function abort(){
     if(st.ac)st.ac.abort();
     fetch('/api/chat/cancel',{method:'POST'}).catch(()=>{});
+  }
+
+  function showResumeDock(text){
+    const dock = $('#resumeDock');
+    const dockText = $('#resumeDockText');
+    if(!dock) return;
+    try{
+      localStorage.setItem('tugumi_interrupted_prompt', text);
+      localStorage.setItem('tugumi_interrupted_sid', st.currentSessionId || 'default');
+    }catch(e){}
+    if(dockText) dockText.textContent = text;
+    dock.style.display = 'flex';
+  }
+
+  function dismissInterruptedTask(){
+    const dock = $('#resumeDock');
+    if(dock) dock.style.display = 'none';
+    try{
+      localStorage.removeItem('tugumi_interrupted_prompt');
+      localStorage.removeItem('tugumi_interrupted_sid');
+    }catch(e){}
+  }
+
+  function checkResumeDockForCurrentSession(){
+    const dock = $('#resumeDock');
+    const dockText = $('#resumeDockText');
+    if(!dock) return;
+    const p = localStorage.getItem('tugumi_interrupted_prompt') || '';
+    const sid = localStorage.getItem('tugumi_interrupted_sid') || 'default';
+    if(p && sid === (st.currentSessionId || 'default')){
+      if(dockText) dockText.textContent = p;
+      dock.style.display = 'flex';
+    }else{
+      dock.style.display = 'none';
+    }
+  }
+
+  function resumeInterruptedTask(autoSend = false){
+    const p = localStorage.getItem('tugumi_interrupted_prompt') || '';
+    if(!p){
+      toast('復元可能な直前の指示がありません', 'inf');
+      return;
+    }
+    const inp = $('#cIn');
+    if(!inp) return;
+    inp.value = p;
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 180) + 'px';
+    dismissInterruptedTask();
+    if(autoSend){
+      send();
+    }else{
+      inp.focus();
+      inp.setSelectionRange(p.length, p.length);
+      toast('直前の指示を入力欄に復元しました', 'ok');
+    }
   }
 
   async function loadAntigravityHud(showToast=false){
@@ -3510,6 +3784,7 @@ const A=(()=>{
         appendMsg('a','拓磨様、会話スレッドを再開いたしました🌸 何なりとお申し付けくださいませ。');
       }
       saveChatLocally();
+      checkResumeDockForCurrentSession();
       scr();
     }catch(e){
       const box=$('#cBox');
@@ -3541,6 +3816,7 @@ const A=(()=>{
       const box=$('#cBox');
       box.innerHTML='';
       appendMsg('a','拓磨様、新しいセッションを開始いたしました🌸\n過去の会話は「☰ 履歴」からいつでも再開いただけます。何なりとお申し付けくださいませ。');
+      dismissInterruptedTask();
       saveChatLocally();
       await loadSessions(false);
       if(!silent) toast('新しい会話スレッドを開始しました','ok');
@@ -4802,6 +5078,21 @@ const A=(()=>{
         }
       }catch(_){}
 
+      // 1.5 RAGステータス取得
+      try{
+        const rr = await fetch('/api/rag/status'), rd = await rr.json();
+        const rRow = $('#ragStatusRow');
+        if(rRow && rd && rd.summary){
+          const rs = rd.summary;
+          const flds = Object.entries(rs.folders || {}).map(([k,v]) => `<span style="color:#94a3b8">📁 ${esc(k)}: <b>${v}</b></span>`).join(' · ');
+          rRow.innerHTML = `<span style="color:#e2e8f0">ファイル: <b style="color:var(--cyan)">${rs.total_files||0}件</b></span>`
+            + `<span style="color:#34d399">総チャンク: <b>${rs.total_chunks||0}</b></span>`
+            + `<span style="color:#c084fc">3072dベクトル: <b>${rs.vector_chunks||0}</b></span>`
+            + `<span style="color:#fbbf24">FTS5: <b>${rs.fts_chunks||0}</b></span>`
+            + (flds ? `<div style="width:100%;margin-top:2px;font-size:10px">${flds}</div>` : '');
+        }
+      }catch(_){}
+
       // 2. メモリ一覧取得
       const url = '/api/memory/memories?limit=50' + (currentMemoryTier ? '&tier=' + encodeURIComponent(currentMemoryTier) : '');
       const r = await fetch(url), d = await r.json(), c = $('#mRec');
@@ -4915,15 +5206,67 @@ const A=(()=>{
         ...(d.memory_results||[]).map(r=>({...r,src:'メモリ'}))];
       if(!all.length){c.innerHTML='<div class="me">結果が見つかりませんでした</div>';return}
       all.forEach(r=>{const i=document.createElement('div');i.className='mi';
+        const titleStr = r.title||r.subject||'無題';
+        const roleBadge = r.role_label ? `<span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(0,240,255,0.12);color:var(--cyan);margin-right:4px">${esc(r.role_label)}</span>` : '';
+        const askBtn = `<button class="btn-mini" onclick="A.askWithRagTitle('${esc(titleStr).replace(/'/g,"\\'")}')" title="このナレッジを使ってチャット・タスクを実行">💬 チャットで活用</button>`;
         const delBtn = r.rowid ? `<button class="mem-del-btn" onclick="A.deleteKnowledgeItem(${r.rowid})">🗑️ 削除</button>` : '';
-        i.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center">'
-          +'<div class="mt">'+esc(r.title||r.subject||'無題')+'</div>'
-          +delBtn
+        i.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">'
+          +'<div class="mt">'+roleBadge+esc(titleStr)+'</div>'
+          +'<div style="display:flex;gap:4px">'+askBtn+delBtn+'</div>'
           +'</div>'
-          +'<div class="mx">'+esc((r.text||r.content||r.fact_content||'').substring(0,300))+'</div>'
-          +'<div class="mm">'+r.src+(r.score?' · スコア: '+(typeof r.score==='number'?r.score.toFixed(3):r.score):'')+'</div>';
+          +'<div class="mx">'+esc((r.clean_text||r.text||r.content||r.fact_content||'').substring(0,320))+'</div>'
+          +'<div class="mm">'+r.src+(r.folder?' · 📁 '+esc(r.folder):'')+(r.score?' · スコア: '+(typeof r.score==='number'?r.score.toFixed(3):r.score):'')+'</div>';
         c.appendChild(i)});toast(all.length+'件の結果','ok');
     }catch(e){c.innerHTML='<div class="me">検索エラー: '+e.message+'</div>'}}
+
+  async function syncRagIndex(){
+    const c=$('#mRes');
+    if(c) c.innerHTML='<div class="me">🔄 TUGUMI_RAG インデックスを同期中...</div>';
+    toast('RAGインデックス同期を開始しました...','ok');
+    try{
+      const r=await fetch('/api/rag/sync',{method:'POST'});
+      const d=await r.json();
+      if(d.status==='ok'){
+        const s=d.summary||{};
+        toast(`RAG同期完了: ${s.total_files||0}ファイル / ${s.total_chunks||0}チャンク`,'ok');
+        loadMem();
+        listRagFiles('');
+      }else{
+        toast('RAG同期エラー: '+(d.error||'不明'),'err');
+      }
+    }catch(e){toast('通信エラー: '+e.message,'err')}
+  }
+
+  async function listRagFiles(folderFilter){
+    const c=$('#mRes');
+    if(!c)return;
+    const flt = (typeof folderFilter==='string') ? folderFilter : ($('#mSI')?$('#mSI').value.trim():'');
+    c.innerHTML='<div class="me">📂 RAGインデックス済ファイル一覧を取得中...</div>';
+    try{
+      const r=await fetch('/api/rag/status?folder='+encodeURIComponent(flt||''));
+      const d=await r.json();
+      const files=d.files||[];
+      c.innerHTML='';
+      if(!files.length){c.innerHTML='<div class="me">条件に一致するRAGファイルがありません</div>';return}
+      files.forEach(f=>{
+        const i=document.createElement('div');i.className='mi';
+        const tStr=f.title||'無題';
+        i.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">
+          <div class="mt"><span style="color:var(--cyan)">${esc(f.role_label||'📘 知識')}</span> ${esc(tStr)}</div>
+          <button class="btn-mini" onclick="A.askWithRagTitle('${esc(tStr).replace(/'/g,"\\'")}')">💬 この資料で質問/タスク</button>
+        </div>
+        <div class="mm">📁 フォルダ: <b>${esc(f.folder||'root')}</b> · チャンク数: <b>${f.chunks||0}</b> · 3072dベクトル: <b>${f.has_3072d?'✅ 完備':'⏳ FTS'}</b></div>`;
+        c.appendChild(i);
+      });
+      toast(`RAGファイル: ${files.length}件を表示`,'ok');
+    }catch(e){c.innerHTML='<div class="me">一覧取得エラー: '+e.message+'</div>'}
+  }
+
+  function askWithRagTitle(title){
+    tab('chat');
+    setInputPrompt(`/rag 「${title}」のナレッジ・基準を踏まえて、`);
+    toast(`チャット入力欄に「${title}」をセットしました🌸`,'ok');
+  }
 
   async function recallAssociativeMem(){
     const q=$('#mSI').value.trim();
@@ -5781,6 +6124,16 @@ const A=(()=>{
     }
   }
 
+  async function toggleEmergencyStop(){
+    if(st.emergencyStopped || st.cbTripped){
+      if(confirm('🟢 【通常復帰・再開】\n\nサーキットブレーカーを解除し、API通信および通常運用を再開いたします。\n\n再開してよろしいですか？')){
+        await resetEmergencyStop();
+      }
+    }else{
+      await emergencyStop();
+    }
+  }
+
   async function emergencyStop(){
     if(!confirm('🚨 【緊急全停止発令】\n\nバックグラウンドで動作中の全サブプロセスをSIGKILLで強制終了し、新規APIリクエストのサーキットブレーカーを即座に遮断します。\n\n実行してよろしいですか？')){
       return;
@@ -5870,14 +6223,20 @@ const A=(()=>{
       banner.style.display = 'flex';
       if(reasonEl) reasonEl.textContent = cb.trip_reason || '拓磨様による緊急全停止中';
       if(btnStop){
-        btnStop.textContent = '🛑 停止中';
-        btnStop.style.background = '#880000';
+        btnStop.textContent = '🟢 通常復帰 (再開)';
+        btnStop.style.background = 'var(--green)';
+        btnStop.style.color = '#000';
+        btnStop.style.borderColor = 'var(--green)';
+        btnStop.title = '🟢 クリックして緊急停止を解除し、通常運用を再開';
       }
     }else{
       banner.style.display = 'none';
       if(btnStop){
         btnStop.textContent = '🚨 緊急停止';
         btnStop.style.background = 'var(--red)';
+        btnStop.style.color = '#fff';
+        btnStop.style.borderColor = 'var(--red)';
+        btnStop.title = '🚨 緊急全停止: 全実行プロセスを強制終了しAPI通信を遮断';
       }
     }
   }
@@ -6103,15 +6462,17 @@ const A=(()=>{
   // ━━ 🧩 SKILL & MCP インスペクタ ━━
   async function loadSkills(showToast = false){
     try{
-      const r = await fetch('/api/skills');
+      const endpoint = showToast ? '/api/skills/reload' : '/api/skills';
+      const r = await fetch(endpoint);
       const d = await r.json();
-      if(d.status === 'ok'){
+      if(d.status === 'ok' || d.success){
         st.skillsData = d.skills || [];
         $('#skillCountBadge').textContent = d.total || st.skillsData.length;
         $('#skillTabCount').textContent = d.total || st.skillsData.length;
         renderSkillsCategoryPills(d.categories || {});
         renderSkills();
-        if(showToast) toast(`SKILL ${st.skillsData.length}件を更新しました`, 'ok');
+        if(showToast) toast(`SKILL ${st.skillsData.length}件＆常駐セッションをホットリロードしました`, 'ok');
+      }
       }else{
         if(showToast) toast(`SKILL取得失敗: ${d.error||'エラー'}`, 'err');
       }
@@ -6704,21 +7065,31 @@ const A=(()=>{
 
   function setStudioMode(mode){
     currentStudioMode = mode;
+    const tabD = $('#studioTabDressup');
     const tabC = $('#studioTabCompose');
     const tabE = $('#studioTabEdit');
     const tabP = $('#studioTabPhoto');
     const dz = $('#studioDropZoneContainer');
+    const dressupCtrl = $('#studioDressupControls');
     const pLabel = $('#studioPromptLabel');
     const pIn = $('#studioPromptIn');
     const exBtn = $('#studioExecuteBtn');
     const upTitle = $('#studioUploadTitle');
     const upDesc = $('#studioUploadDesc');
 
-    [tabC, tabE, tabP].forEach(t => { if(t) { t.style.background = ''; t.style.color = ''; } });
+    [tabD, tabC, tabE, tabP].forEach(t => { if(t) { t.style.background = ''; t.style.color = ''; } });
 
-    if(mode === 'compose'){
+    if(mode === 'dressup'){
+      if(tabD) { tabD.style.background = '#ff007f'; tabD.style.color = '#fff'; }
+      if(dz) dz.style.display = 'none';
+      if(dressupCtrl) dressupCtrl.classList.remove('hid');
+      if(pLabel) pLabel.textContent = '💡 補足・特殊ディレクション (任意):';
+      if(pIn) pIn.placeholder = '例: 光学特性や追加の小道具指定など（省略可）';
+      if(exBtn) exBtn.textContent = '👗 Gemini 3.1 で顔立ち固定・着せ替えを実行';
+    }else if(mode === 'compose'){
       if(tabC) { tabC.style.background = 'var(--cyan)'; tabC.style.color = '#000'; }
       if(dz) dz.style.display = 'block';
+      if(dressupCtrl) dressupCtrl.classList.add('hid');
       if(upTitle) upTitle.textContent = '合成したい画像をドラッグ＆ドロップ、またはタップして選択 (2枚以上)';
       if(upDesc) upDesc.textContent = '例: モデル人物画像 ＋ 着せたいドレス画像、またはモデル ＋ 旅行先の背景風景';
       if(pLabel) pLabel.textContent = '🎭 合成・融合指示プロンプト:';
@@ -6727,6 +7098,7 @@ const A=(()=>{
     }else if(mode === 'edit'){
       if(tabE) { tabE.style.background = 'var(--pink)'; tabE.style.color = '#000'; }
       if(dz) dz.style.display = 'block';
+      if(dressupCtrl) dressupCtrl.classList.add('hid');
       if(upTitle) upTitle.textContent = '編集・変形したい画像を1枚選択';
       if(upDesc) upDesc.textContent = '既存モデルの顔立ち・特徴を完全維持したまま、衣装・背景・ポーズを変形します';
       if(pLabel) pLabel.textContent = '🖼️ 編集・変形指示プロンプト:';
@@ -6735,6 +7107,7 @@ const A=(()=>{
     }else{ // photo
       if(tabP) { tabP.style.background = 'var(--green)'; tabP.style.color = '#000'; }
       if(dz) dz.style.display = 'none'; // 画像アップロード不要
+      if(dressupCtrl) dressupCtrl.classList.add('hid');
       if(pLabel) pLabel.textContent = '📸 超リアル実写ポートレート指示プロンプト:';
       if(pIn) pIn.placeholder = '例: 表参道のテラスカフェでアイスコーヒーを飲んで微笑む21歳清楚系女子大生、午後の柔らかい日差し';
       if(exBtn) exBtn.textContent = '📸 Gemini 3 で超リアル実写美女を生成';
@@ -6800,6 +7173,59 @@ const A=(()=>{
     const resMeta = $('#studioResultMeta');
     const dlLink = $('#studioDownloadLink');
 
+    if(currentStudioMode === 'dressup'){
+      const outfit = ($('#studioOutfitIn') ? $('#studioOutfitIn').value : '').trim();
+      const bg = ($('#studioBgIn') ? $('#studioBgIn').value : '').trim();
+      const pose = ($('#studioPoseIn') ? $('#studioPoseIn').value : '').trim();
+      const autoCrop = $('#studioDressupCropCb') ? $('#studioDressupCropCb').checked : true;
+      const refPath = (dressupActiveRef && dressupActiveRef.path) ? dressupActiveRef.path : (studioImages.length ? studioImages[0].file_path : '');
+
+      if(!refPath){
+        toast('着せ替え用のリファレンス画像を選択してください', 'err');
+        return;
+      }
+
+      if(loading) loading.classList.remove('hid');
+      if(resArea) resArea.classList.add('hid');
+
+      toast('👗 Gemini 3.1 で顔立ち固定・着せ替えを実行中...', 'inf');
+
+      try{
+        const payload = {
+          image_paths: [refPath],
+          outfit: outfit || prompt,
+          background: bg,
+          mood_or_pose: pose,
+          auto_crop_black_bars: autoCrop
+        };
+
+        const r = await fetch('/api/image/dressup', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+
+        if(loading) loading.classList.add('hid');
+
+        if(d.success && d.file_path){
+          toast('🎉 着せ替え画像が完成しました！', 'ok');
+          const imgUrl = d.preview_url || ('/api/media/file/image/' + encodeURIComponent(d.file_path.split('/').pop()));
+          if(resImg) resImg.src = imgUrl;
+          if(dlLink) dlLink.href = imgUrl;
+          if(resMeta) resMeta.textContent = `保存先: ${d.file_path} (${d.dimensions || '高精細'}) - ${d.model || 'Gemini 3.1'}`;
+          if(resArea) resArea.classList.remove('hid');
+          loadMediaGallery(true);
+        }else{
+          toast('実行失敗: ' + (d.error || 'エラーが発生しました'), 'err');
+        }
+      }catch(e){
+        if(loading) loading.classList.add('hid');
+        toast('通信エラー: ' + e.message, 'err');
+      }
+      return;
+    }
+
     if(currentStudioMode === 'compose'){
       if(studioImages.length < 2){
         toast('複数画像の合成には2枚以上の画像をアップロードしてください', 'err');
@@ -6854,6 +7280,253 @@ const A=(()=>{
       if(loading) loading.classList.add('hid');
       toast('通信エラー: ' + e.message, 'err');
     }
+  }
+
+  // ━━━ 👗 AI美女 顔立ち完全固定・着せ替えスタジオ (Takuma Spec) State & Functions ━━━
+  let dressupActiveRef = {
+    type: 'gold',
+    path: '/storage/emulated/0/TUGUMIDesk/Images/ref_model_closeup.png',
+    name: 'ref_model_closeup.png',
+    preview_url: '/api/media/file/image/ref_model_closeup.png'
+  };
+  let dressupReferencesCache = null;
+
+  async function loadDressupReferences(force){
+    if(dressupReferencesCache && !force) return dressupReferencesCache;
+    try{
+      const r = await fetch('/api/image/dressup/references');
+      const d = await r.json();
+      if(d.success){
+        dressupReferencesCache = d;
+        // 最新スクショボタンの更新
+        const btnSs = $('#btnRefLatestSs');
+        if(btnSs && d.latest_screenshot){
+          btnSs.textContent = `📸 最新スクショ (${d.latest_screenshot.name})`;
+          btnSs.title = d.latest_screenshot.path;
+        }
+        // 金型モデルボタンの更新
+        const btnGold = $('#btnRefGold');
+        if(btnGold && !d.gold_model){
+          btnGold.style.opacity = '0.5';
+        }
+        // 初期リファレンスのセット（未設定の場合、最新スクショまたは金型）
+        if(!dressupActiveRef.custom_set){
+          if(d.latest_screenshot){
+            selectDressupRef('latest_ss');
+          }else if(d.gold_model){
+            selectDressupRef('gold');
+          }
+        }
+      }
+      return d;
+    }catch(e){
+      console.warn('loadDressupReferences error:', e);
+      return null;
+    }
+  }
+
+  function selectDressupRef(type, customObj){
+    if(type === 'latest_ss'){
+      if(dressupReferencesCache && dressupReferencesCache.latest_screenshot){
+        const ss = dressupReferencesCache.latest_screenshot;
+        dressupActiveRef = {type: 'latest_ss', path: ss.path, name: ss.name, preview_url: ss.preview_url, custom_set: true};
+      }else{
+        toast('最新スクリーンショットが見つかりません', 'err');
+        return;
+      }
+    }else if(type === 'gold'){
+      if(dressupReferencesCache && dressupReferencesCache.gold_model){
+        const gm = dressupReferencesCache.gold_model;
+        dressupActiveRef = {type: 'gold', path: gm.path, name: gm.name, preview_url: gm.preview_url, custom_set: true};
+      }else{
+        dressupActiveRef = {
+          type: 'gold',
+          path: '/storage/emulated/0/TUGUMIDesk/Images/ref_model_closeup.png',
+          name: 'ref_model_closeup.png',
+          preview_url: '/api/media/file/image/ref_model_closeup.png',
+          custom_set: true
+        };
+      }
+    }else if(type === 'custom' && customObj){
+      dressupActiveRef = {
+        type: 'custom',
+        path: customObj.file_path,
+        name: customObj.filename || customObj.name,
+        preview_url: customObj.preview_url,
+        custom_set: true
+      };
+    }
+
+    // UIプレビュー同期 (インラインカード ＆ モーダル)
+    const cardThumb = $('#dressupActiveRefThumb');
+    const cardName = $('#dressupActiveRefName');
+    const cardPath = $('#dressupActiveRefPath');
+    const modalThumb = $('#studioDressupRefThumb');
+    const modalName = $('#studioDressupRefName');
+
+    if(cardThumb) cardThumb.src = dressupActiveRef.preview_url;
+    if(cardName) cardName.textContent = dressupActiveRef.name;
+    if(cardPath) cardPath.textContent = dressupActiveRef.path;
+    if(modalThumb) modalThumb.src = dressupActiveRef.preview_url;
+    if(modalName) modalName.textContent = dressupActiveRef.name;
+
+    toast(`✔ 顔立ちリファレンスを設定: ${dressupActiveRef.name}`, 'ok');
+  }
+
+  function setDressupPreset(category, value){
+    if(category === 'outfit'){
+      const in1 = $('#dressupOutfitIn');
+      const in2 = $('#studioOutfitIn');
+      if(in1) in1.value = value;
+      if(in2) in2.value = value;
+      toast('👗 衣装プリセットを適用しました', 'inf');
+    }else if(category === 'bg'){
+      const in1 = $('#dressupBgIn');
+      const in2 = $('#studioBgIn');
+      if(in1) in1.value = value;
+      if(in2) in2.value = value;
+      toast('🏞️ 背景プリセットを適用しました', 'inf');
+    }else if(category === 'pose'){
+      const in1 = $('#dressupPoseIn');
+      const in2 = $('#studioPoseIn');
+      if(in1) in1.value = value;
+      if(in2) in2.value = value;
+      toast('😊 表情・ポーズプリセットを適用しました', 'inf');
+    }
+  }
+
+  async function handleDressupFileSelect(files){
+    if(!files || !files.length) return;
+    const f = files[0];
+    toast(`📁 リファレンス画像「${f.name}」をアップロード中...`, 'inf');
+    const fd = new FormData();
+    fd.append('file', f);
+    try{
+      const r = await fetch('/api/image/upload', {method: 'POST', body: fd});
+      const d = await r.json();
+      if(d.success){
+        selectDressupRef('custom', d);
+      }else{
+        toast('アップロード失敗: ' + (d.error || f.name), 'err');
+      }
+    }catch(e){
+      toast('通信エラー: ' + e.message, 'err');
+    }
+  }
+
+  async function executeDressupDirect(){
+    const outfit = ($('#dressupOutfitIn') ? $('#dressupOutfitIn').value : '').trim();
+    const bg = ($('#dressupBgIn') ? $('#dressupBgIn').value : '').trim();
+    const pose = ($('#dressupPoseIn') ? $('#dressupPoseIn').value : '').trim();
+    const autoCrop = $('#dressupAutoCropCb') ? $('#dressupAutoCropCb').checked : true;
+
+    if(!dressupActiveRef || !dressupActiveRef.path){
+      toast('リファレンス画像を選択してください', 'err');
+      return;
+    }
+
+    const loading = $('#dressupLoading');
+    const resArea = $('#dressupResultArea');
+    const resImg = $('#dressupResultImg');
+    const resMeta = $('#dressupResultMeta');
+    const dlLink = $('#dressupDownloadLink');
+
+    if(loading) loading.classList.remove('hid');
+    if(resArea) resArea.classList.add('hid');
+
+    toast('👗 Gemini 3.1 で顔立ち完全固定・着せ替えを実行中...', 'inf');
+
+    try{
+      const payload = {
+        image_paths: [dressupActiveRef.path],
+        outfit: outfit,
+        background: bg,
+        mood_or_pose: pose,
+        auto_crop_black_bars: autoCrop
+      };
+
+      const r = await fetch('/api/image/dressup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const d = await r.json();
+
+      if(loading) loading.classList.add('hid');
+
+      if(d.success && d.file_path){
+        toast('🎉 顔立ち固定・着せ替え画像が完成しました！', 'ok');
+        const imgUrl = d.preview_url || ('/api/media/file/image/' + encodeURIComponent(d.file_path.split('/').pop()));
+        if(resImg) resImg.src = imgUrl;
+        if(dlLink) dlLink.href = imgUrl;
+        if(resMeta) resMeta.textContent = `保存先: ${d.file_path} (${d.dimensions || '高精細'}) - ${d.model || 'Gemini 3.1 Flash Image'}`;
+        if(resArea) resArea.classList.remove('hid');
+        loadMediaGallery(true);
+      }else{
+        toast('着せ替え生成失敗: ' + (d.error || 'エラーが発生しました'), 'err');
+      }
+    }catch(e){
+      if(loading) loading.classList.add('hid');
+      toast('通信エラー: ' + e.message, 'err');
+    }
+  }
+
+  async function createFreshModelDirect(){
+    toast('✨ 8大方程式で完全新規の最高峰AI美女モデルを創成中...', 'inf');
+    const masterConcept = "21-year-old ethereal Japanese beauty model, delicate oval face, almond dark eyes with soft aegyo-sal, naturally moist lips, tiny charming beauty mark below left eye, wispy see-through bangs, wearing cozy oversized cream knit";
+    try{
+      const r = await fetch('/api/image/studio/execute', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          mode: 'photo',
+          prompt: masterConcept,
+          style: 'photoreal',
+          aspect_ratio: '1:1'
+        })
+      });
+      const d = await r.json();
+      if(d.success && d.file_path){
+        toast('🎉 新規AI美女モデルが創成されました！着せ替えリファレンスにセットします', 'ok');
+        selectDressupRef('custom', {
+          file_path: d.file_path,
+          name: d.filename || d.file_path.split('/').pop(),
+          preview_url: d.preview_url || ('/api/media/file/image/' + encodeURIComponent(d.file_path.split('/').pop()))
+        });
+        loadMediaGallery(true);
+      }else{
+        toast('モデル創成失敗: ' + (d.error || 'エラー'), 'err');
+      }
+    }catch(e){
+      toast('通信エラー: ' + e.message, 'err');
+    }
+  }
+
+  function setDressupResultAsNewRef(){
+    const resImg = $('#dressupResultImg');
+    if(!resImg || !resImg.src){
+      toast('生成画像が見つかりません', 'err');
+      return;
+    }
+    const fname = resImg.src.split('/').pop();
+    const fullPath = `/storage/emulated/0/TUGUMIDesk/Images/${decodeURIComponent(fname)}`;
+    selectDressupRef('custom', {
+      file_path: fullPath,
+      name: decodeURIComponent(fname),
+      preview_url: resImg.src
+    });
+    toast('📸 完成画像を新しい顔立ちリファレンスにセットしました！続けて別の衣装に着せ替え可能です', 'ok');
+  }
+
+  function openDressupStudio(){
+    tab('tools');
+    const card = $('#dressupStudioCard');
+    if(card){
+      setTimeout(() => {
+        card.scrollIntoView({behavior: 'smooth', block: 'center'});
+      }, 150);
+    }
+    loadDressupReferences(false);
   }
 
   // ━━━ 🎼 Hit Song Producer Studio State & Functions ━━━
@@ -8395,7 +9068,7 @@ const A=(()=>{
     playVoiceSample,saveLiveSettings,reconnectLiveSession,
     loadAvatarSettings,uploadAvatar,resetAvatar,saveAvatarSettings,openAvatarSettings,
     loadTel,openLiveTelemetryModal,closeLiveTelemetryModal,runDoctorInspect,
-    loadMem,loadHist,searchMem,recallAssociativeMem,queryLearningGraph,addKnow,addMemoryFact,deleteMemoryItem,deleteKnowledgeItem,filterTier,triggerDecay,
+    loadMem,loadHist,searchMem,syncRagIndex,listRagFiles,askWithRagTitle,recallAssociativeMem,queryLearningGraph,addKnow,addMemoryFact,deleteMemoryItem,deleteKnowledgeItem,filterTier,triggerDecay,
     loadTools,loadRunningTools,runTool,runToolBgDirect,stopTool,
     renderTools,selectToolCategory,filterTools,runToolPro,runToolHelp,
     generateBriefingDirect,showLatestBriefing,loadBriefingSchedules,addBriefingSchedule,deleteBriefingSchedule,
@@ -8403,11 +9076,13 @@ const A=(()=>{
     loadMediaGallery,filterMediaGallery,previewMediaItem,
     openMusicStudio,closeMusicStudio,executeMusicProduce,produceMusicDirect,
     openImageStudio,closeImageStudio,setStudioMode,handleStudioDrop,handleStudioFiles,removeStudioImage,executeStudioAction,
+    openDressupStudio,loadDressupReferences,selectDressupRef,setDressupPreset,handleDressupFileSelect,executeDressupDirect,createFreshModelDirect,setDressupResultAsNewRef,
     loadClonedSites,createCloneSite,openClonePreview,openClonePreviewDirect,closeClonePreview,
     reloadClonePreview,openClonePreviewNewTab,setClonePreviewDevice,deleteCloneSite,openCloneStudioDirect,
     closeConsole,clearConsole,copyConsole,closeInlineConsole,clearInlineConsole,copyInlineConsole,
     setLogCategoryFilter,ansiToHtml,purgeMemory,optDb,testModelPing,
-    loadLogs,clearLogs,toggleLogAutoScroll,debounceLogSearch,shutdownServer,emergencyStop,resetEmergencyStop,checkRateStatus,
+    loadLogs,clearLogs,toggleLogAutoScroll,debounceLogSearch,shutdownServer,emergencyStop,resetEmergencyStop,toggleEmergencyStop,checkRateStatus,
+    showResumeDock,dismissInterruptedTask,resumeInterruptedTask,
     loadSkills,loadMcp,switchSkillSubTab,filterSkillsCategory,filterSkillsSearch,
     openSkillDetail,closeSkillModal,useSkillInChat,useSkillInChatFromModal,openMcpDetail,closeMcpModal,executeMcpToolDirect,loadFpfStatus,
     loadSpr,switchIncomeMode,

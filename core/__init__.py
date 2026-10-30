@@ -8,6 +8,7 @@ from .loop_guard import LoopGuard
 from .engine_manager import EngineManager
 from .evolution_engine import SelfEvolutionEngine
 from .termux_doctor import TermuxDoctor
+from .skill_assimilator import SkillAssimilator
 
 __all__ = [
     "GeminiClient",
@@ -18,5 +19,6 @@ __all__ = [
     "LoopGuard",
     "EngineManager",
     "SelfEvolutionEngine",
-    "TermuxDoctor"
+    "TermuxDoctor",
+    "SkillAssimilator"
 ]

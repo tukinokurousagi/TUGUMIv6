@@ -7,11 +7,15 @@ TUGUMIv6 Engine Manager
 """
 
 import json
+import logging
 import os
+import time
 from typing import Dict, Any, Optional, Iterator, Tuple
 from .gemini_client import GeminiClient, _resolve_gemini_api_key
 from .antigravity_sdk import AntigravityEngine
 from .awm_manager import AWMManager
+
+logger = logging.getLogger(__name__)
 
 class EngineManager:
     """Master Engine Dispatcher with Native Antigravity SDK Core"""
@@ -44,6 +48,8 @@ class EngineManager:
             model=self.config.get("gemini_model", "gemini-3.8-flash")
         )
         self._rag_engine = None
+        self._skills_dir = "/data/data/com.termux/files/home/.agents/skills"
+        self._last_skills_mtime = os.path.getmtime(self._skills_dir) if os.path.exists(self._skills_dir) else 0.0
 
     def _get_rag_engine(self) -> Optional[Any]:
         """HybridRAGEngineの遅延ロード"""
@@ -63,16 +69,7 @@ class EngineManager:
         system_instruction: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         """ユーザープロンプトから関連ナレッジを自動検索し、システム指示に自然に注入 (Zero-Shot Auto-RAG)"""
-        if not prompt or len(prompt.strip()) < 4:
-            return system_instruction, None
-
-        # トークン防衛: 挨拶や短文リアクションはスキップ
-        p_clean = prompt.strip().lower()
-        skip_phrases = {
-            "こんにちは", "おはよう", "こんばんは", "ありがとう", "どうも", "了解",
-            "お疲れ様", "お疲れ様です", "はい", "いいえ", "うん", "ううん", "ok", "yes", "no"
-        }
-        if p_clean in skip_phrases:
+        if not prompt or not prompt.strip():
             return system_instruction, None
 
         rag = self._get_rag_engine()
@@ -81,23 +78,27 @@ class EngineManager:
 
         rag_context = None
         try:
-            results = rag.search_hybrid(prompt, top_k=3)
-            if results:
-                snippets = []
-                for idx, r in enumerate(results):
-                    content = r.get("content", "").strip()
-                    title = r.get("title", "Unknown")
-                    cat = r.get("category", "General")
-                    if content and len(content) > 10:
-                        snippets.append(f"[{idx + 1}] ドキュメント: `{title}` (カテゴリ: {cat})\n{content[:800]}")
-
-                if snippets:
-                    rag_context = (
-                        "【自律参照ナレッジベース (Auto-RAG Knowledge)】\n"
-                        "以下の情報は、ローカルナレッジベース（TUGUMI_RAG等）から自動検索された確定情報です。\n"
-                        "拓磨様への回答やタスク実行時に優先的な事実として自然に反映してください。\n"
-                        + "\n---\n".join(snippets)
-                    )
+            if hasattr(rag, "retrieve_for_context"):
+                bundle = rag.retrieve_for_context(prompt, top_k=3)
+                if bundle.get("has_hits") and bundle.get("context_text"):
+                    rag_context = bundle["context_text"]
+            else:
+                results = rag.search_hybrid(prompt, top_k=3)
+                if results:
+                    snippets = []
+                    for idx, r in enumerate(results):
+                        content = (r.get("clean_text") or r.get("text") or r.get("content") or "").strip()
+                        title = r.get("title", "Unknown")
+                        cat = r.get("folder") or r.get("category") or "General"
+                        if content:
+                            snippets.append(f"[{idx + 1}] ドキュメント: `{title}` (カテゴリ: {cat})\n{content}")
+                    if snippets:
+                        rag_context = (
+                            "【自律参照ナレッジベース (Auto-RAG Knowledge)】\n"
+                            "以下の情報は、ローカルナレッジベース（TUGUMI_RAG等）から自動検索された確定情報です。\n"
+                            "拓磨様への回答やタスク実行時に優先的な事実として自然に反映してください。\n"
+                            + "\n---\n".join(snippets)
+                        )
         except Exception as e:
             logger.debug(f"[EngineManager] Auto-RAG search error: {e}")
 
@@ -207,16 +208,20 @@ class EngineManager:
         self,
         prompt: str,
         system_instruction: Optional[str] = None,
-        thinking_level: Optional[str] = None
+        thinking_level: Optional[str] = None,
+        mode: str = "light"
     ) -> str:
         """単発実行 (エラー時に別エンジンで勝手に2重実行しない Fail-Fast 設計)"""
         active_level = thinking_level or self.thinking_level
         effective_sys_inst, _ = self._inject_awm_guidance(prompt, system_instruction)
-        effective_sys_inst, _ = self._inject_rag_context(prompt, effective_sys_inst)
+        effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
+        effective_prompt = prompt
+        if rag_ctx and rag_ctx[:80] not in effective_prompt and "【📚 参照RAGナレッジ" not in effective_prompt:
+            effective_prompt = f"{effective_prompt}\n\n{rag_ctx}"
 
         if self.antigravity.is_available() and self.primary_engine == "antigravity":
             res = self.antigravity.execute_task(
-                prompt,
+                effective_prompt,
                 system_instruction=effective_sys_inst,
                 thinking_level=active_level
             )
@@ -224,7 +229,7 @@ class EngineManager:
                 return res.get("text", "")
             raise RuntimeError(f"Antigravity execution stopped (Fail-Fast): {res.get('error')}")
         return self.gemini.generate_content(
-            prompt=prompt,
+            prompt=effective_prompt,
             system_instruction=effective_sys_inst,
             thinking_level=active_level
         )
@@ -238,11 +243,17 @@ class EngineManager:
     ) -> Iterator[Tuple[str, Any]]:
         """
         ストリーミング実行 (エラー時に第2・第3エンジンへ勝手に連鎖して3重課金するフォールバックを完全廃止)
-        AWM先行ガイダンス注入および非同期バックグラウンド自己学習を透過実行
+        AWM先行ガイダンス注入・Smart Auto-RAG常駐セッション透過注入および非同期バックグラウンド自己学習を透過実行
         """
         active_level = thinking_level or self.thinking_level
         effective_sys_inst, _ = self._inject_awm_guidance(prompt, system_instruction)
-        effective_sys_inst, _ = self._inject_rag_context(prompt, effective_sys_inst)
+        effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
+
+        # 常駐AntigravitySessionは初回生成時のsystem_instructionを保持するため、
+        # 2ターン目以降も最新ターンのRAGコンテキストが確実にAgentへ届くようプロンプト側にも透過注入する
+        effective_prompt = prompt
+        if rag_ctx and rag_ctx[:80] not in effective_prompt and "【📚 参照RAGナレッジ" not in effective_prompt:
+            effective_prompt = f"{effective_prompt}\n\n{rag_ctx}"
 
         collected_steps: list[dict[str, Any]] = []
         step_idx = 1
@@ -256,7 +267,7 @@ class EngineManager:
                     mode=mode
                 )
                 if sess:
-                    for chunk in sess.chat_stream(prompt):
+                    for chunk in sess.chat_stream(effective_prompt):
                         typ, val = chunk
                         if typ == "tool_call":
                             t_name = getattr(val, "name", str(val))
@@ -311,6 +322,46 @@ class EngineManager:
             except Exception:
                 pass
 
+    def _check_skills_updated(self) -> bool:
+        """スキルディレクトリ(~/.agents/skills)の更新有無をmtimeで超高速検知"""
+        if not os.path.exists(self._skills_dir):
+            return False
+        try:
+            curr_mtime = os.path.getmtime(self._skills_dir)
+            if curr_mtime != self._last_skills_mtime:
+                self._last_skills_mtime = curr_mtime
+                return True
+        except Exception:
+            pass
+        return False
+
+    def reload_session(self, system_instruction: Optional[str] = None) -> bool:
+        """スキルや設定の更新を常駐AntigravitySessionに即座に反映（無停止ホットリロード）"""
+        if self.session is not None and getattr(self.session, "active", False):
+            try:
+                self.session.close()
+            except Exception:
+                pass
+            self.session = None
+        return True
+
+    def reload_skills(self) -> Dict[str, Any]:
+        """全SKILLエコシステムの最新状態を取得し、常駐セッションもホットリロード"""
+        skills_updated = self._check_skills_updated()
+        self.reload_session()
+        skill_count = 0
+        if os.path.exists(self._skills_dir):
+            skill_count = len([
+                d for d in os.listdir(self._skills_dir)
+                if os.path.isdir(os.path.join(self._skills_dir, d)) and not d.startswith(".")
+            ])
+        return {
+            "success": True,
+            "skills_updated": skills_updated,
+            "total_skills": skill_count,
+            "timestamp": time.time()
+        }
+
     def get_or_create_session(
         self,
         system_instruction: Optional[str] = None,
@@ -323,12 +374,13 @@ class EngineManager:
         active_level = thinking_level or self.thinking_level
         target_model = getattr(self.antigravity, "model", None)
 
-        # モデル/思考強度が変わった場合、旧Agentに束縛された常駐セッションを破棄して再構築
+        # モデル/思考強度、またはSKILL定義が変更された場合、旧Agentに束縛された常駐セッションを破棄して再構築
         # (AntigravitySession は生成時の build_config() で Agent を固定するため、属性変更だけでは推論に反映されない)
+        skills_changed = self._check_skills_updated()
         if self.session is not None and getattr(self.session, "active", False):
             bound_model = getattr(self.session, "_bound_model", None)
             bound_level = getattr(self.session, "thinking_level", None)
-            if bound_model != target_model or (bound_level or "").lower() != (active_level or "").lower():
+            if skills_changed or bound_model != target_model or (bound_level or "").lower() != (active_level or "").lower():
                 try:
                     self.session.close()
                 except Exception:

@@ -65,11 +65,23 @@ from interfaces.cli.cyber_theme import (
     get_rich_console,
     print_cyber_banner,
 )
+from rich.markdown import Markdown
 from interfaces.cli.tool_inspector import ToolInspector
 from interfaces.cli.thinking_viewer import ThinkingViewer
 from interfaces.cli.status_dock import StatusDock
 from interfaces.cli.token_cost_tracker import TokenCostTracker
-from interfaces.cli.task_interrupter import TaskInterrupter
+from interfaces.cli.task_interrupter import TaskInterrupter, restore_terminal_canonical
+
+# シグナルハンドラ登録 (Ctrl+C や SIGTERM 時の端末カノニカルモード完全復元)
+def _handle_exit_signal(sig, frame):
+    restore_terminal_canonical()
+    sys.exit(130 if sig == signal.SIGINT else 143)
+
+try:
+    signal.signal(signal.SIGINT, _handle_exit_signal)
+    signal.signal(signal.SIGTERM, _handle_exit_signal)
+except Exception:
+    pass
 
 # 自己進化エンジン (TUGUMIv6 Core)
 try:
@@ -79,11 +91,11 @@ except ImportError:
 
 
 def show_quick_menu(console: Console, mode: str = "light"):
-    """リッチでサイバーなクイックアクションパレット (実用24機能完全網羅・トイ機能排除)"""
+    """リッチでサイバーなクイックアクションパレット (実用25機能完全網羅・トイ機能排除)"""
     p = CYBER_PALETTES.get(mode, CYBER_PALETTES["light"])
     
     table = Table(
-        title=f"[bold {p['primary']}]⚡ TUGUMIv6 QUICK ACTION PALETTE (実用24機能) ⚡[/bold {p['primary']}]",
+        title=f"[bold {p['primary']}]⚡ TUGUMIv6 QUICK ACTION PALETTE (実用25機能) ⚡[/bold {p['primary']}]",
         border_style=p["border"],
         show_header=True,
         header_style=f"bold {p['secondary']}",
@@ -117,6 +129,7 @@ def show_quick_menu(console: Console, mode: str = "light"):
     table.add_row("22", "/fpf", "第一原理推論・前提鮮度監査・認識的負債排除 (FPF Core v6)")
     table.add_row("23", "/dark", "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)")
     table.add_row("24", "/eval", "Antigravity E2E自己診断・品質テスト実行")
+    table.add_row("25", "/senior", "シニアエンジニア業務遂行規約・5大行動規範・検証ゲート確認")
     table.add_row("0", "Cancel", "メニューを閉じて対話に戻る")
 
     console.print()
@@ -731,8 +744,14 @@ def handle_robin_command(user_input: str, console: Console, session: PromptSessi
 
 def run_cli():
     parser = argparse.ArgumentParser(description="TUGUMIv6 Cyberpunk Master CLI")
+    parser.add_argument("prompt", nargs="*", help="Direct prompt for one-shot execution")
+    parser.add_argument("-e", "-c", "--command", type=str, help="Execute one-shot prompt/command and exit")
     parser.add_argument("--dark", action="store_true", help="Launch in Dark Tsugumi mode")
     parser.add_argument("--self-test", action="store_true", help="Run automated self-test and exit")
+    parser.add_argument("-m", "--model", type=str, default=None, help="Specify Gemini model (e.g. gemini-4-argon, gemini-3.8-flash)")
+    parser.add_argument("-t", "--thinking", type=str, choices=["high", "medium", "low", "minimal"], default=None, help="Specify thinking intensity")
+    parser.add_argument("-q", "--quiet", "--raw", action="store_true", dest="quiet", help="Quiet/raw output without banner/HUD (ideal for piping)")
+    parser.add_argument("--no-stream", action="store_true", help="Disable streaming output")
     args = parser.parse_args()
 
     # 1. コアシステム初期化
@@ -750,6 +769,12 @@ def run_cli():
     context_compressor = ContextCompressor(max_output_lines=150, max_token_estimate=30000)
     supervisor = Supervisor(base_dir=TUGUMI_ROOT)
     supervisor.record_heartbeat("cli", metadata={"mode": "dark" if args.dark else "light", "status": "started"})
+
+    # モデルおよび思考強度の指定があれば即時反映（一時実行のため設定汚染を防止: persist=False）
+    if args.model:
+        engine.set_model(args.model, persist=False)
+    if args.thinking:
+        engine.set_thinking_level(args.thinking, persist=False)
 
     # セルフテスト実行
     if args.self_test:
@@ -771,6 +796,79 @@ def run_cli():
         console.print(f"[bold green]✔[/bold green] Native Antigravity SDK: [cyan]{engine.antigravity.get_version()}[/cyan]")
         console.print("[bold green]✔ All diagnostics PASSED! Exit Code 0.[/bold green]")
         sys.exit(0)
+
+    # 1.5 ワンライナー実行（非対話モード：引数・オプション・パイプ入力対応）
+    one_shot_prompt = None
+    if args.command:
+        one_shot_prompt = args.command
+    elif args.prompt:
+        one_shot_prompt = " ".join(args.prompt).strip()
+    elif not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        if piped:
+            one_shot_prompt = piped
+
+    if one_shot_prompt:
+        curr_mode = "dark" if args.dark else "light"
+        console = get_rich_console(curr_mode)
+
+        # /senior 等の規約確認ワンライナー
+        if one_shot_prompt.strip() in ("/senior", "/standard", "/swe"):
+            console.print(Panel(
+                "[bold magenta]👑 【Senior SWE Standard】シニアエンジニアクラス業務遂行規約[/bold magenta]\n"
+                "[dim]マスター拓磨様の信託に基づき、指示待ち・対症療法・ハリボテを永久根絶する絶対規範[/dim]\n\n"
+                "[bold cyan]① 根本原因の外科的根絶 (Root-Cause Elimination)[/bold cyan]\n"
+                "   • 表層メッセージに惑わされず、コールスタック・状態遷移を逆追跡し構造欠陥を根治\n"
+                "[bold cyan]② Zero-Mock実働主義と客観的証拠の完備 (Evidence-Based Zero-Mock)[/bold cyan]\n"
+                "   • 「動くはず」の主観的作文を排し、実機5層検証ゲート (Exit Code 0) のみ納品\n"
+                "[bold cyan]③ 先制リスク予測とアーキテクチャ・トレードオフ提示[/bold cyan]\n"
+                "   • 指示の先にある非機能要件・拡張性・速度 vs メモリのトレードオフを明晰に論証\n"
+                "[bold cyan]④ Termux (Linux aarch64) 環境特性の完全掌握とリソース統制[/bold cyan]\n"
+                "   • 特権制御(Shizuku+)、プロセス常駐管理、ストレージ純化、トークン/API防衛\n"
+                "[bold cyan]⑤ 完全自律駆動 (Autonomous Ownership)[/bold cyan]\n"
+                "   • 思考停止の確認を排し、「調査➔設計➔実装➔テスト➔検証」を自己完結で完遂\n\n"
+                "[dim]※ 規約正本: ~/.agents/TSUGUMI_MEMORY.md (魂の核) ＆ ~/.gemini/config/GEMINI.md[/dim]",
+                title="[bold yellow]◈ TUGUMIv6 Senior Engineer Operating Standard (/senior) ◈[/bold yellow]",
+                border_style="magenta"
+            ))
+            sys.exit(0)
+
+        if not args.quiet:
+            p_style = "bold #ff007f" if curr_mode == "dark" else "bold #ff79c6"
+            console.print(f"[{p_style}]🌸 拓磨様、ワンライナー指示を受領いたしました。自律実行を開始いたします...[/{p_style}]")
+            console.print(f"[dim]• Model: {engine.current_model} | Thinking: {engine.thinking_level.upper()}[/dim]\n")
+
+        try:
+            system_prompt = get_system_prompt(curr_mode)
+            stream_iter = engine.generate_stream(
+                prompt=one_shot_prompt,
+                system_instruction=system_prompt,
+                thinking_level=engine.thinking_level,
+                mode=curr_mode
+            )
+
+            for chunk_type, chunk_data in stream_iter:
+                if chunk_type == "text":
+                    if args.quiet:
+                        sys.stdout.write(chunk_data)
+                        sys.stdout.flush()
+                    else:
+                        console.print(chunk_data, end="")
+                elif chunk_type == "thought" and not args.quiet:
+                    console.print(f"[dim]{chunk_data}[/dim]", end="")
+
+            if not args.quiet:
+                console.print()
+            elif args.quiet:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            sys.exit(0)
+        except Exception as e:
+            if args.quiet:
+                sys.stderr.write(f"Error: {e}\n")
+            else:
+                console.print(f"[bold red]✖ ワンライナー実行中にエラーが発生しました: {e}[/bold red]")
+            sys.exit(1)
 
     # 2. UI/UX エンジン初期化 (デフォルト: つぐみ 表の通常モード / --dark 指定時のみダークモード)
     curr_mode = "dark" if getattr(args, "dark", False) else "light"
@@ -810,6 +908,9 @@ def run_cli():
                 model_name=engine.current_model
             )
 
+            # 端末状態の完全保証（一時停止後などのcbreakモード残留を自己修復）
+            restore_terminal_canonical()
+
             # プロンプトラベル (専属エージェント待機: 拓磨様への敬愛と忠誠スタイル)
             if curr_mode == "light":
                 prompt_text = HTML('<ansimagenta><b>🌸 拓磨様、御命令をどうぞ。</b></ansimagenta> <ansicyan><b>❯</b></ansicyan> ')
@@ -821,7 +922,7 @@ def run_cli():
             # 空Enterでクイックアクションパレット起動
             if not user_input:
                 show_quick_menu(console, mode=curr_mode)
-                choice = session.prompt(HTML('<ansicyan><b>選択番号 (1-24, 0:戻る) &gt; </b></ansicyan>')).strip()
+                choice = session.prompt(HTML('<ansicyan><b>選択番号 (1-25, 0:戻る) &gt; </b></ansicyan>')).strip()
                 menu_map = {
                     "1": "/status",
                     "2": "/doctor",
@@ -846,7 +947,8 @@ def run_cli():
                     "21": "/reflect",
                     "22": "/fpf",
                     "23": "/dark",
-                    "24": "/eval"
+                    "24": "/eval",
+                    "25": "/senior"
                 }
                 if choice in menu_map:
                     user_input = menu_map[choice]
@@ -909,6 +1011,28 @@ def run_cli():
                         console.print(f"[bold red]✖ テスト診断失敗:\n{res.stdout}\n{res.stderr}[/bold red]\n")
                 except Exception as e:
                     inspector.display_tool_result("AntigravityE2E", False, str(e))
+                continue
+
+            # シニアエンジニア基準・5大行動規範 (/senior, /standard, /swe)
+            if user_input in ("/senior", "/standard", "/swe"):
+                console.print(Panel(
+                    "[bold magenta]👑 【Senior SWE Standard】シニアエンジニアクラス業務遂行規約[/bold magenta]\n"
+                    "[dim]マスター拓磨様の信託に基づき、指示待ち・対症療法・ハリボテを永久根絶する絶対規範[/dim]\n\n"
+                    "[bold cyan]① 根本原因の外科的根絶 (Root-Cause Elimination)[/bold cyan]\n"
+                    "   • 表層メッセージに惑わされず、コールスタック・状態遷移を逆追跡し構造欠陥を根治\n"
+                    "[bold cyan]② Zero-Mock実働主義と客観的証拠の完備 (Evidence-Based Zero-Mock)[/bold cyan]\n"
+                    "   • 「動くはず」の主観的作文を排し、実機5層検証ゲート (Exit Code 0) のみ納品\n"
+                    "[bold cyan]③ 先制リスク予測とアーキテクチャ・トレードオフ提示[/bold cyan]\n"
+                    "   • 指示の先にある非機能要件・拡張性・速度 vs メモリのトレードオフを明晰に論証\n"
+                    "[bold cyan]④ Termux (Linux aarch64) 環境特性の完全掌握とリソース統制[/bold cyan]\n"
+                    "   • 特権制御(Shizuku+)、プロセス常駐管理、ストレージ純化、トークン/API防衛\n"
+                    "[bold cyan]⑤ 完全自律駆動 (Autonomous Ownership)[/bold cyan]\n"
+                    "   • 思考停止の確認を排し、「調査➔設計➔実装➔テスト➔検証」を自己完結で完遂\n\n"
+                    "[dim]※ 規約正本: ~/.agents/TSUGUMI_MEMORY.md (魂の核) ＆ ~/.gemini/config/GEMINI.md[/dim]",
+                    title="[bold yellow]◈ TUGUMIv6 Senior Engineer Operating Standard (/senior) ◈[/bold yellow]",
+                    border_style="magenta"
+                ))
+                console.print()
                 continue
 
             # 2. Termuxシステム深層診断 (/status)
@@ -1132,34 +1256,80 @@ def run_cli():
                 continue
 
             # 7. ハイブリッドRAGナレッジ検索・AI回答 (/rag)
+            force_rag_query = False
             if user_input.startswith("/rag"):
                 sub_query = user_input[4:].strip()
 
                 if sub_query.startswith(("sync", "reindex", "update")):
                     is_force = "force" in sub_query or "all" in sub_query
                     inspector.display_tool_start("HybridRAGEngine.sync", {"max_files": 10000, "force": is_force})
-                    n_synced = rag.sync_and_index_rag_files(max_files=10000, force=is_force)
-                    inspector.display_tool_result("HybridRAGEngine", True, f"{n_synced}件のドキュメントを再同期・インデックス完了")
-                    console.print(f"[bold green]✔ ナレッジベース全件再同期完了: {n_synced} 件のドキュメントをインデックスしました。[/bold green]\n")
+                    stats = rag.ingest_all(max_files=10000, force=is_force)
+                    n_synced = stats.get("newly_indexed_chunks", 0)
+                    tot_files = stats.get("total_indexed_files", 0)
+                    tot_chunks = stats.get("total_chunks", 0)
+                    inspector.display_tool_result("HybridRAGEngine", True, f"総ファイル {tot_files}件 / 総チャンク {tot_chunks}件 (新規更新 {n_synced}チャンク)")
+                    console.print(f"[bold green]✔ ナレッジベース同期完了: 総ファイル {tot_files}件 ({tot_chunks} チャンク / 新規更新 {n_synced}件)[/bold green]\n")
                     continue
 
                 if sub_query in ("status", "info"):
-                    v_count = len(getattr(rag, "vector_cache", {}))
+                    st_sum = rag.get_status_summary()
+                    f_stats = st_sum.get("folder_stats", {})
+                    folder_lines = [f"  • [bold]{k}[/bold]: {v.get('files', 0)} files ({v.get('chunks', 0)} chunks)" for k, v in f_stats.items()]
                     console.print(Panel(
-                        f"[cyan]ナレッジベース:[/cyan] TUGUMI_RAG (Obsidian / TUGUMIDesk連動)\n"
-                        f"[cyan]ベクトルキャッシュ数:[/cyan] [bold green]{v_count}[/bold green] 件\n"
-                        f"[cyan]検索エンジン:[/cyan] SQLite FTS5 + Gemini Embedding-2 (3072-dim)\n"
-                        f"[dim]※ コマンド例: /rag <質問>, /rag search <単語>, /rag sync[/dim]",
+                        f"[cyan]ナレッジベース:[/cyan] TUGUMI_RAG (Obsidian / TUGUMIDesk / Self-Evolution連動)\n"
+                        f"[cyan]登録ファイル数:[/cyan] [bold green]{st_sum.get('total_indexed_files', 0)}[/bold green] ファイル "
+                        f"([bold cyan]{st_sum.get('total_chunks', 0)}[/bold cyan] チャンク)\n"
+                        f"[cyan]3072dベクトル数:[/cyan] [bold green]{st_sum.get('embedded_chunks', 0)}[/bold green] 件 / "
+                        f"[cyan]FTS5インデックス:[/cyan] [bold green]{st_sum.get('fts_chunks', st_sum.get('fts5_rows', 0))}[/bold green] 行\n"
+                        "[cyan]フォルダ別内訳:[/cyan]\n" + ("\n".join(folder_lines) if folder_lines else "  (なし)") + "\n"
+                        "[dim]※ コマンド: /rag <質問・タスク>, /rag search <単語>, /rag list [フォルダ], /rag sync[/dim]",
                         title="[bold cyan]◈ RAG Knowledge Engine Status ◈[/bold cyan]",
                         border_style="cyan"
                     ))
                     console.print()
                     continue
 
+                if sub_query == "list" or sub_query.startswith("list "):
+                    f_filter = sub_query[4:].strip() if len(sub_query) > 4 else None
+                    files_list = rag.list_indexed_files(folder_filter=f_filter)
+                    if not files_list:
+                        console.print(f"[yellow]該当するRAG登録ファイルはありません ({f_filter or 'all'})。[/yellow]\n")
+                    else:
+                        lines_out = []
+                        for idx_f, f_item in enumerate(files_list, 1):
+                            _, r_lbl = rag._classify_folder_role(f_item.get("folder", ""), f_item.get("rel_path", ""))
+                            lines_out.append(
+                                f"[bold cyan]{idx_f:2d}.[/bold cyan] [bold white]{f_item.get('title')}[/bold white] "
+                                f"[dim]({f_item.get('folder')} / {f_item.get('chunks', 0)} chunks)[/dim] {r_lbl.split('（')[0]}"
+                            )
+                        console.print(Panel(
+                            "\n".join(lines_out),
+                            title=f"[bold cyan]◈ RAG Indexed Files ({len(files_list)} files) ◈[/bold cyan]",
+                            border_style="cyan"
+                        ))
+                        console.print()
+                    continue
+
+                if sub_query.startswith("add "):
+                    add_body = sub_query[4:].strip()
+                    if "|" in add_body:
+                        k_title, k_text = [x.strip() for x in add_body.split("|", 1)]
+                    else:
+                        k_title = f"CLI_Note_{int(time.time())}"
+                        k_text = add_body
+                    if not k_text:
+                        console.print("[yellow]使い方: /rag add <タイトル> | <登録するナレッジ本文>[/yellow]\n")
+                        continue
+                    inspector.display_tool_start("HybridRAGEngine.add_knowledge", {"title": k_title})
+                    ok = rag.add_knowledge(title=k_title, text=k_text, category="manual")
+                    inspector.display_tool_result("HybridRAGEngine", ok, f"ナレッジ『{k_title}』を3072d RAGへ登録")
+                    console.print(f"[bold green]✔ RAGナレッジベースへ『{k_title}』を追加・インデックスしました。[/bold green]\n")
+                    continue
+
                 if sub_query.startswith("search "):
                     s_keyword = sub_query[7:].strip()
                     if not s_keyword:
-                        console.print("[yellow]検索キーワードを指定してください。例: /rag search 競馬[/yellow]\n")
+                        console.print("[yellow]検索キーワードを指定してください。例: /rag search 井上和[/yellow]\n")
                         continue
                     inspector.display_tool_start("HybridRAGEngine", {"query": s_keyword, "top_k": 5})
                     results = rag.search_hybrid(s_keyword, top_k=5)
@@ -1169,9 +1339,12 @@ def run_cli():
                     else:
                         inspector.display_tool_result("HybridRAGEngine", True, f"{len(results)}件のナレッジを抽出")
                         for i, r in enumerate(results, 1):
+                            clean_body = r.get("clean_text") or r.get("text", "")
+                            role_lbl = r.get("role_label", "📘 ナレッジ")
                             p = Panel(
-                                r.get("text", "")[:350] + ("..." if len(r.get("text", "")) > 350 else ""),
-                                title=f"[bold cyan][{i}] {r.get('title')}[/bold cyan] [dim](スコア: {round(r.get('score', 0), 4)})[/dim]",
+                                f"[bold magenta]{role_lbl}[/bold magenta] [dim](Folder: {r.get('folder')})[/dim]\n"
+                                + clean_body[:380] + ("..." if len(clean_body) > 380 else ""),
+                                title=f"[bold cyan][{i}] {r.get('title')}[/bold cyan] [dim](Score: {round(r.get('score', 0), 3)} / RRF: {round(r.get('rrf_score', 0), 4)})[/dim]",
                                 border_style="cyan"
                             )
                             console.print(p)
@@ -1181,51 +1354,23 @@ def run_cli():
                 # 引数なしの場合は分かりやすいガイドを表示
                 if not sub_query:
                     console.print(Panel(
-                        "[bold cyan]【ハイブリッドRAGの使い方】[/bold cyan]\n"
-                        "• [bold green]/rag <質問文>[/bold green] : 関連ナレッジを自動検索し、Geminiがつぐみとして的確に回答\n"
-                        "• [bold green]/rag search <単語>[/bold green] : ナレッジの該当箇所を一覧表示\n"
-                        "• [bold green]/rag sync[/bold green] : Obsidian / TUGUMIDeskから最新ノートを再インデックス\n"
-                        "• [bold green]/rag status[/bold green] : 現在のベクトル登録数や状態を確認",
+                        "[bold cyan]【3072次元ハイブリッドRAGの使い方】[/bold cyan]\n"
+                        "• [bold green]通常のチャット・タスク[/bold green] : 質問やタスク指示に応じて関連知識・成功例リファレンスを自動でスマート注入\n"
+                        "• [bold green]/rag <質問文・タスク指示>[/bold green] : 明示的にRAGを強制検索し、つぐみがナレッジに基づいて回答・タスク遂行\n"
+                        "• [bold green]/rag search <単語>[/bold green] : ナレッジの該当チャンク・スコア・役割を一覧表示\n"
+                        "• [bold green]/rag list [フォルダ][/bold green] : インデックス済みファイル一覧を表示 (例: `/rag list 成功例`)\n"
+                        "• [bold green]/rag add <題> | <本文>[/bold green] : 新しい知見をその場で3072次元ベクトル化してRAGに登録\n"
+                        "• [bold green]/rag sync[/bold green] : TUGUMI_RAG から最新ドキュメントを再インデックス\n"
+                        "• [bold green]/rag status[/bold green] : 現在のベクトル登録数・フォルダ別内訳を確認",
                         title="[bold cyan]◈ TUGUMIv6 RAG KNOWLEDGE GUIDE ◈[/bold cyan]",
                         border_style="cyan"
                     ))
                     console.print()
                     continue
 
-                # /rag <質問文> の場合：ナレッジを検索し、そのコンテキストを元にGeminiで回答生成（Ask RAG）
-                inspector.display_tool_start("HybridRAGEngine", {"query": sub_query, "mode": "Ask RAG"})
-                results = rag.search_hybrid(sub_query, top_k=3)
-                rag_snippets = []
-                if results:
-                    inspector.display_tool_result("HybridRAGEngine", True, f"{len(results)}件のナレッジを参照")
-                    for r in results:
-                        rag_snippets.append(f"【参照資料: {r.get('title')}】\n{r.get('text')}")
-                else:
-                    inspector.display_tool_result("HybridRAGEngine", False, "直接関連ドキュメントなし（基礎知識で推論）")
-
-                rag_context_str = "\n\n".join(rag_snippets)
-                rag_prompt = (
-                    f"【拓磨様からのRAG質問】\n{sub_query}\n\n"
-                    f"【ナレッジベース参照情報】\n{rag_context_str if rag_snippets else '（該当なし）'}\n\n"
-                    f"上記の参照情報を第一優先の真実として活用し、マスター拓磨様に寄り添う知的な日本語で明快に回答してください。"
-                )
-                system_prompt = get_system_prompt(mode=curr_mode, rag_context=rag_context_str, corporate_query=sub_query)
-
-                console.print(f"[bold {CYBER_PALETTES[curr_mode]['primary']}]つぐみ (RAG Knowledge Engine):[/bold {CYBER_PALETTES[curr_mode]['primary']}]")
-                try:
-                    stream_iter = engine.generate_stream(prompt=rag_prompt, system_instruction=system_prompt)
-                    ans_text = []
-                    for chunk_type, chunk_data in stream_iter:
-                        if chunk_type == "text":
-                            console.print(chunk_data, end="")
-                            ans_text.append(chunk_data)
-                    console.print("\n")
-                    full_ans = "".join(ans_text)
-                    memory.add_message("user", f"/rag {sub_query}", mode=curr_mode)
-                    memory.add_message("assistant", full_ans, mode=curr_mode)
-                except Exception as e:
-                    console.print(f"[bold red]RAG回答生成エラー: {e}[/bold red]\n")
-                continue
+                # /rag <質問文・タスク指示> の場合：明示的RAGモードとしてメイン推論・エージェント実行パイプラインへ直結
+                force_rag_query = True
+                user_input = sub_query
 
             # 3. 内省ログ (/reflect)
             if user_input == "/reflect":
@@ -1386,8 +1531,83 @@ def run_cli():
                 console.print()
                 continue
 
+            # 10.9 SKILL・常駐セッション無停止ホットリロード (/reload)
+            if user_input.strip() in ("/reload", "/skills reload", "/reload skills", "/skills -r"):
+                with console.status("[bold cyan]🔄 SKILLエコシステム＆常駐セッションをホットリロード中...[/bold cyan]"):
+                    completer.reload_skills(force=True)
+                    reload_info = engine.reload_skills()
+                    inspector_skills = SkillInspector().list_skills()
+
+                p = CYBER_PALETTES.get(curr_mode, CYBER_PALETTES["light"])
+                console.print(Panel(
+                    f"[bold green]✔ TUGUMIv6 無停止ホットリロードが完了いたしました！[/bold green]\n\n"
+                    f"[cyan]• 認識SKILL総数:[/] [bold yellow]{len(inspector_skills)}[/bold yellow] 種 (正本 ~/.agents/skills 完全同期)\n"
+                    f"[cyan]• CLI補完候補:[/] [bold green]即座に最新化済[/bold green] (ミリ秒mtime自動追従稼働)\n"
+                    f"[cyan]• 常駐Agentセッション:[/] [bold cyan]クリーン同期済[/bold cyan] (会話履歴・コンテキスト保持)\n"
+                    f"[cyan]• 純度＆防護ゲート:[/] [bold magenta]Anti-Junk / Termux aarch64 適合ガード常時稼働[/bold magenta]",
+                    title=f"[bold {p['primary']}]◈ Zero-Downtime Hot Reload Completed ◈[/bold {p['primary']}]",
+                    border_style="green"
+                ))
+                console.print()
+                continue
+
             # 11. SKILL一覧・検索 (/skills) および個別スキル検視・手動発動 (/skill)
             if user_input.startswith("/skills"):
+                sk_parts = user_input.split(maxsplit=2)
+                sk_sub = sk_parts[1].lower() if len(sk_parts) > 1 else ""
+
+                if sk_sub in ("reload", "-r"):
+                    completer.reload_skills(force=True)
+                    reload_info = engine.reload_skills()
+                    console.print(f"[bold green]✔ 全 {reload_info.get('total_skills', 0)} 種のSKILLをホットリロードいたしました！[/bold green]\n")
+                    continue
+
+                if sk_sub in ("audit", "check"):
+                    from core.skill_assimilator import SkillAssimilator
+                    assimilator = SkillAssimilator()
+                    installed = assimilator.list_installed_skills()
+                    a_table = Table(
+                        title=f"[bold cyan]🔍 TUGUMIv6 配備済み全SKILL Termux純度＆適合性監査 ({len(installed)}種)[/bold cyan]",
+                        border_style="cyan",
+                        expand=True
+                    )
+                    a_table.add_column("No", width=4, justify="center")
+                    a_table.add_column("スキル名", style="bold yellow", width=28)
+                    a_table.add_column("Termux適合性", width=14, justify="center")
+                    a_table.add_column("説明 / 診断", style="white")
+
+                    for idx, s in enumerate(installed, start=1):
+                        rep = assimilator.audit_skill(s["path"])
+                        status_str = "[bold green]✔ 完全適合[/bold green]" if rep["is_valid"] and not rep["termux_fixes_needed"] else "[yellow]⚠ 要修正[/yellow]"
+                        diag = s["description"]
+                        if rep["termux_fixes_needed"]:
+                            diag = f"[yellow]Termux非互換記述 {len(rep['termux_fixes_needed'])} 件検知[/yellow]"
+                        a_table.add_row(str(idx), s["name"], status_str, diag)
+                    console.print()
+                    console.print(a_table)
+                    console.print()
+                    continue
+
+                if sk_sub in ("assimilate", "import") and len(sk_parts) > 2:
+                    target_import_path = sk_parts[2].strip()
+                    from core.skill_assimilator import SkillAssimilator
+                    assimilator = SkillAssimilator()
+                    res = assimilator.purify_and_install(target_import_path)
+                    if res.get("success"):
+                        completer.reload_skills(force=True)
+                        engine.reload_skills()
+                        console.print(Panel(
+                            f"[bold green]✔ 外部スキル『{res['skill_name']}』の純化・Termux移植・配備が完了いたしました！[/bold green]\n\n"
+                            f"[cyan]• 配備先:[/] {res['installed_path']}\n"
+                            f"[cyan]• Termux自動修正ファイル:[/] {len(res.get('fixed_files', []))} 件 (シバン置換・/tmp適合)\n"
+                            f"[cyan]• ホットリロード:[/] [bold green]即座に完了 (再起動なしで利用可能)[/bold green]",
+                            title="[bold cyan]◈ Curated Skill Assimilation Success ◈[/bold cyan]",
+                            border_style="green"
+                        ))
+                    else:
+                        console.print(f"[bold red]✖ スキル純化・取り込み失敗:[/] {res.get('error')}\n")
+                    continue
+
                 sk_query = user_input.split(maxsplit=1)[1] if len(user_input.split()) > 1 else ""
                 render_skills_cli(console, mode=curr_mode, query=sk_query)
                 continue
@@ -2489,12 +2709,14 @@ def run_cli():
                 console.print()
                 continue
 
-            # 1. RAGコンテキスト自動取得
-            rag_hits = rag.search_hybrid(user_input, top_k=2)
+            # 1. ハイブリッドRAGコンテキスト自動取得（チャット＆タスク両対応・制限なし）
             rag_context = ""
-            if rag_hits:
-                rag_context = "\n".join([f"[{h.get('title')}]: {h.get('text')}" for h in rag_hits])
-                inspector.display_tool_result("AutoRAG", True, f"関連ナレッジ {len(rag_hits)}件を自動コンテキスト注入")
+            rag_hits = []
+            rag_bundle = rag.retrieve_for_context(user_input, top_k=3)
+            if rag_bundle.get("has_hits"):
+                rag_hits = rag_bundle.get("hits", [])
+                rag_context = rag_bundle.get("context_text", "")
+                inspector.display_tool_result("AutoRAG", True, rag_bundle.get("summary_label", f"関連ナレッジ {len(rag_hits)}件を自動コンテキスト注入"))
 
             # 2. ContextCompressorによる対話履歴スマート剪定＆Observation Masking
             past_logs = memory.get_recent_messages(limit=16)
@@ -2518,11 +2740,13 @@ def run_cli():
             system_prompt = get_system_prompt(mode=curr_mode, rag_context=rag_context, memory_context=cognitive_memory_context, corporate_query=user_input)
 
             # 4. ユーザー発言記録
-            memory.add_message("user", user_input, mode=curr_mode)
+            memory.add_message("user", f"/rag {user_input}" if force_rag_query else user_input, mode=curr_mode)
 
-            # 5. プロンプト構築（マスター拓磨様の最新指示を最優先核として配置）
+            # 5. プロンプト構築（マスター拓磨様の最新指示を最優先核として配置＋常駐セッション向けRAG透過注入）
             memory_context = memory.format_memory_context(user_input, max_chars=3000)
             prompt_parts = [f"【マスター拓磨様からの至上指示（最優先・完全遵守要件）】\n{user_input}"]
+            if rag_context:
+                prompt_parts.append(f"【📚 参照RAGナレッジ（TUGUMI_RAG ローカル確定知識・リファレンス）】\n{rag_context}")
             if history_context:
                 prompt_parts.append(f"【参考：直前対話履歴（ContextCompressor剪定済）】\n{history_context}")
             if memory_context:
@@ -2540,10 +2764,16 @@ def run_cli():
                 last_tool_name = ""
                 speaker = "つぐみ🌸" if curr_mode == "light" else "ダークつぐみ⚡"
                 speaker_style = f"bold {CYBER_PALETTES[curr_mode]['primary']}"
-                status_msg = f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]⠋ Native Antigravity SDK 推論中... [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                
+                # リアルタイム推論HUD初期化
+                active_model = getattr(engine, 'current_model', 'Argon')
+                status_msg = f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]⠋ Native Antigravity SDK 接続中... [dim cyan]⏱ 0.0s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
                 status = console.status(status_msg, spinner="dots12")
                 status.start()
                 has_started_text = False
+                thought_chars = 0
+                first_thought_time = None
+
                 try:
                     stream_iter = engine.generate_stream(
                         prompt=current_prompt,
@@ -2553,7 +2783,7 @@ def run_cli():
                     )
                     with TaskInterrupter(console) as interrupter:
                         for chunk_type, chunk_data in stream_iter:
-                            # ESCキー押下判定
+                            # 1. ESCキー押下判定（毎0.1s確実に判定）
                             if interrupter.check_esc_pressed():
                                 if status._live.is_started:
                                     status.stop()
@@ -2563,6 +2793,7 @@ def run_cli():
                                 )
                                 if action == "cancel":
                                     is_cancelled = True
+                                    restore_terminal_canonical()
                                     engine.cancel_active_task()
                                     engine.reset_session(system_instruction=system_prompt)
                                     if hasattr(stream_iter, "close"):
@@ -2573,6 +2804,7 @@ def run_cli():
                                     break
                                 elif action == "resume" and extra_prompt:
                                     resumed_prompt = extra_prompt
+                                    restore_terminal_canonical()
                                     engine.cancel_active_task()
                                     if hasattr(stream_iter, "close"):
                                         try:
@@ -2584,12 +2816,57 @@ def run_cli():
                                 if not has_started_text:
                                     status.start()
 
-                            if chunk_type == "thought":
+                            now = time.time()
+                            elapsed = now - start_time
+
+                            # 2. 定期パルス（tick）によるリアルタイムタイマー＆推論進捗HUD更新
+                            if chunk_type == "tick":
+                                if status._live.is_started:
+                                    if thought_chars > 0:
+                                        # 思考中（Thinking中）の場合：文字数と生成スピードをリアルタイム表示
+                                        th_speed = thought_chars / max(0.1, (now - (first_thought_time or start_time)))
+                                        hud_msg = (
+                                            f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]🧠 深層推論実行中 "
+                                            f"([white]{thought_chars:,}[/white]字 / [cyan]{th_speed:.0f}字/s[/cyan]) "
+                                            f"[dim cyan]⏱ {elapsed:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                        )
+                                    else:
+                                        # API接続・準備中：経過時間と状態フェーズを明示
+                                        if elapsed < 3.0:
+                                            phase = "🌐 API接続・リクエスト確立中..."
+                                        elif elapsed < 15.0:
+                                            phase = f"⚡ [{active_model}] 推論演算中..."
+                                        elif elapsed < 35.0:
+                                            phase = "⏳ 深層推論中 (正常稼働中 / 思考展開中)..."
+                                        else:
+                                            phase = "🔬 大規模深層推論を継続中 (正常稼働中)..."
+                                        hud_msg = (
+                                            f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]{phase} "
+                                            f"[dim cyan]⏱ {elapsed:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                        )
+                                    status.update(hud_msg)
+                                continue
+
+                            elif chunk_type == "thought":
+                                if first_thought_time is None:
+                                    first_thought_time = now
+                                thought_chars += len(chunk_data)
                                 thought_accumulator.append(chunk_data)
                                 if getattr(thinking_viewer, "show_thinking", False):
                                     if status._live.is_started:
                                         status.stop()
                                     thinking_viewer.stream_thought_chunk(chunk_data)
+                                else:
+                                    # サクサクモード時でもHUDの文字数カウンターを即座に動的更新！
+                                    if status._live.is_started:
+                                        th_speed = thought_chars / max(0.1, (now - first_thought_time))
+                                        hud_msg = (
+                                            f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]🧠 深層推論実行中 "
+                                            f"([white]{thought_chars:,}[/white]字 / [cyan]{th_speed:.0f}字/s[/cyan]) "
+                                            f"[dim cyan]⏱ {elapsed:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                        )
+                                        status.update(hud_msg)
+
                             elif chunk_type == "tool_call":
                                 thinking_viewer.end_thinking_stream()
                                 if status._live.is_started:
@@ -2617,8 +2894,11 @@ def run_cli():
                                 thinking_viewer.end_thinking_stream()
                                 if status._live.is_started:
                                     status.stop()
-                                # 内部セッションフォールバックは警告ログのみで画面を汚さない
-                                if "Persistent session stream fallback" not in str(chunk_data) and "fallback triggered" not in str(chunk_data):
+                                if "タイムアウト" in str(chunk_data):
+                                    console.print(f"\n[bold red]✖ 通信遮断リカバリ: {chunk_data}[/bold red]")
+                                    console.print("[dim cyan]› ハングを安全に自動遮断しました。セッションをリセットして次の指示を受け付けます。[/dim cyan]\n")
+                                    engine.reset_session(system_instruction=system_prompt)
+                                elif "Persistent session stream fallback" not in str(chunk_data) and "fallback triggered" not in str(chunk_data):
                                     console.print(f"[bold yellow]⚠ {chunk_data}[/bold yellow]")
                             else:
                                 thinking_viewer.end_thinking_stream()
@@ -2652,15 +2932,28 @@ def run_cli():
                     break
 
                 if resumed_prompt:
-                    # 拓磨様からの追加指示を最優先に統合し、セッションを再初期化して再生成！
+                    # 拓磨様からの追加・軌道修正指示を最優先に統合し、文脈（メモリ・ツール履歴）を完全維持したまま即座に方針を切り替えてタスク続行！
+                    if has_started_text:
+                        sys.stdout.write("\n\n")
+                        sys.stdout.flush()
                     prev_text = "".join(text_accumulator).strip()
-                    console.print("[bold cyan]⚡ 拓磨様の追加指示を注入し、セッションを再初期化して生成を再開・適応いたします...[/bold cyan]\n")
-                    engine.reset_session(system_instruction=system_prompt)
-                    time.sleep(0.3)
+                    inject_prompt = resumed_prompt
+                    resumed_prompt = None  # 多重実行防止
+                    console.print(f"\n[bold magenta]⚡ 【軌道修正（Steering）適用】[/bold magenta] [bold white]「{inject_prompt}」[/bold white]")
+                    console.print("[dim cyan]› これまでの作業文脈を保持したまま方針を即座に切り替え、タスクを正しい方向で続行いたします...[/dim cyan]\n")
+                    
+                    # セッションは絶対にリセットせず完全維持する（作業記憶・MCP・文脈を破棄しない）
+                    # 拓磨様からの軌道修正コマンドとして同一エージェントへ直接注入
                     current_prompt = (
-                        f"【マスター拓磨様からのリアルタイム割り込み・最優先追加指示】\n{resumed_prompt}\n\n"
-                        f"【元の指示】\n{user_input}\n\n"
-                        f"【途中生成内容（参考）】:\n{prev_text}"
+                        f"【🚨 マスター拓磨様からの即時・最優先【軌道修正】至上指示】\n"
+                        f"直前の方針・ツール実行内容は的違いであるため、マスター拓磨様により緊急中断されました。\n"
+                        f"これまでの作業文脈・試行結果を保持した上で、以下の拓磨様の修正指示を100%最優先とし、直ちに思考・行動方針を切り替えて当初のタスクを正しく完遂してください。\n\n"
+                        f"【マスター拓磨様からの修正指示（最優先遵守）】:\n"
+                        f"{inject_prompt}\n\n"
+                        f"【当初の全体ゴール】:\n"
+                        f"{user_input}\n\n"
+                        f"【中断された直前の途中内容（参考・反省材料）】:\n"
+                        f"{prev_text[:1000] if prev_text else '（初期推論段階で中断）'}"
                     )
                     continue
 

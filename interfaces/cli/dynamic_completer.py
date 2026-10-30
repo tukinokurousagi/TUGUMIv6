@@ -9,6 +9,7 @@ TUGUMIv6 Rich Dynamic Auto-Completer with Full Japanese Descriptions
 
 import os
 import re
+import time
 from typing import Dict
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
@@ -20,11 +21,14 @@ MAIN_COMMANDS: Dict[str, str] = {
     "/new": "新規会話セッション開始 (/clear と同等)",
     "/dark": "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)",
     "/light": "通常モード (つぐみ🌸) へ明示的に切替",
+    "/senior": "シニアエンジニア業務遂行規約・5大行動規範・検証ゲート確認",
+    "/swe": "シニアエンジニア業務遂行規約ショートカット (/senior と同等)",
     "/eval": "Antigravity SDK E2E自己診断・品質テスト実行",
     "/test": "E2Eテスト診断ショートカット (/eval と同等)",
     "/status": "Termux＆スマホ健全性リアルタイム診断 (CPU/RAM/Battery)",
     "/sys": "システム診断ショートカット (/status と同等)",
     "/doctor": "Termux環境自律整備＆修復 (プロセス回収/ゴミ掃除/Phantom)",
+    "/reload": "SKILL・MCP・常駐セッションの無停止ホットリロード (/reload)",
     "/skills": "TUGUMIv6 SKILLエコシステム全61種一覧・検索 (/skills [word])",
     "/skill": "指定スキルの詳細確認・手動強制発動 (/skill <スキル名> [指示])",
     "/mcp": "MCP 2.0 連携サーバー・ツール一覧確認 (/mcp [server])",
@@ -194,7 +198,46 @@ class TugumiRichCompleter(Completer):
     """Rich Completer that provides intuitive completions with full Japanese explanations."""
 
     def __init__(self):
+        self._skills_dir = os.path.expanduser("~/.agents/skills")
+        self._last_skills_check = 0.0
+        self._last_skills_mtime = 0.0
         self.skills_meta = load_skills_with_descriptions()
+        self._update_mtime_record()
+
+    def _update_mtime_record(self):
+        try:
+            if os.path.exists(self._skills_dir):
+                self._last_skills_mtime = os.path.getmtime(self._skills_dir)
+        except Exception:
+            pass
+
+    def reload_skills(self, force: bool = False) -> bool:
+        """
+        ~/.agents/skills の更新日時(mtime)を検査し、変更があれば無停止で補完メタデータを再構築
+        force=True の場合は無条件で即時再読込
+        """
+        now = time.time()
+        if not force and (now - self._last_skills_check < 0.5):
+            return False
+
+        self._last_skills_check = now
+        should_reload = force
+
+        if not should_reload:
+            try:
+                if os.path.exists(self._skills_dir):
+                    curr_mtime = os.path.getmtime(self._skills_dir)
+                    if curr_mtime != self._last_skills_mtime:
+                        should_reload = True
+            except Exception:
+                pass
+
+        if should_reload:
+            self.skills_meta = load_skills_with_descriptions()
+            self._update_mtime_record()
+            return True
+
+        return False
 
     def get_completions(self, document: Document, complete_event):
         text = document.text_before_cursor
@@ -220,6 +263,7 @@ class TugumiRichCompleter(Completer):
 
         # A. /skill または /skills
         if base_cmd in ("/skill", "/skills"):
+            self.reload_skills(force=False)
             for s_name, s_meta in self.skills_meta.items():
                 if s_name.lower().startswith(sub_word):
                     yield Completion(

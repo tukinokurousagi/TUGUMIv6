@@ -1239,19 +1239,31 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
         skills = inspector.list_skills()
         if query:
             q_lower = query.lower()
-            skills = [s for s in skills if q_lower in s["name"].lower() or q_lower in s["description"].lower()]
+            skills = [s for s in skills if q_lower in s["name"].lower() or q_lower in s["description"].lower() or q_lower in s["category"].lower()]
         
         lines = [
-            f"### 🧩 TUGUMIv6 SKILL エコシステム (計 {len(skills)} 種搭載)\n"
+            f"### 🧩 TUGUMIv6 SKILL エコシステム (計 {len(skills)} 種認識中・完全同期済)\n"
         ]
-        for idx, s in enumerate(skills[:25], 1):
-            lines.append(
-                f"- **{idx}. `{s['name']}`** `[{s['category']}]`\n"
-                f"  - {s['description'][:80]}"
-            )
-        if len(skills) > 25:
-            lines.append(f"\n*※ 他 {len(skills) - 25} 件のスキルがロードされています。「🧩 スキル&MCP」タブから全件検索・詳細閲覧が可能です。*")
-        reply = "\n".join(lines)
+        if query:
+            for idx, s in enumerate(skills, 1):
+                lines.append(
+                    f"- **{idx}. `{s['name']}`** `[{s['category']}]`\n"
+                    f"  - {s['description'][:100]}"
+                )
+        else:
+            # カテゴリ別に全件を整理表示
+            by_cat = {}
+            for s in skills:
+                by_cat.setdefault(s["category"], []).append(s)
+            
+            for cat, cat_skills in by_cat.items():
+                lines.append(f"#### 📂 {cat} ({len(cat_skills)}種)")
+                for s in cat_skills:
+                    lines.append(f"- **`{s['name']}`**: {s['description'][:65]}...")
+                lines.append("")
+            lines.append("*※ 各スキルの詳細仕様は `/skill <名前>` または「🧩 スキル & MCP」タブから閲覧できます。*")
+
+        reply = "\n".join(lines).strip()
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
 
     # 7.5 FPF 第一原理推論・前提鮮度監査 (/fpf) — スマホ最適化カードブロック形式
@@ -1836,6 +1848,19 @@ Torネットワーク上の **16基の `.onion` 検索エンジン** を一斉�
                 reply = f"⚠️ **画像生成エラー**: {res.get('error', '不明なエラー')}"
         except Exception as e:
             reply = f"⚠️ **画像生成例外**: {e}"
+        return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+    # 18.2.1 AI美女 顔立ち固定・着せ替えスタジオ (/dressup)
+    if cmd == "/dressup":
+        reply = """### 👗 TUGUMIv6 AI美女 顔立ち固定・着せ替えスタジオ (`/dressup`)
+
+お気に入りの顔立ち（Character DNA / 骨格・目元・生体質感）を100%固定し、夏祭り浴衣・セーラー制服・白ニット等への着せ替え＆背景置換を自在に行えます。
+
+- 💡 **WebUIツールタブ**の「👗 AI美女 顔立ち完全固定・着せ替えスタジオ」または「🎨 メディア」モーダルから、ワンタップで最新スクショ・金型モデル選択＆着せ替え生成が可能です。
+- 🖥️ **CLI / ターミナルから**:
+  - `tugumi-dressup-interactive` : 対話形式スタジオ
+  - `tugumi-dressup <画像パス> -o "浴衣" -b "夏祭り"` : コマンド直接指定
+"""
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
 
     # 18.3 トークン＆日本円利用料金確認 (/credits, /cost)
@@ -2486,8 +2511,8 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
                 await asyncio.sleep(0)
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
-        full_text = "".join(text_chunks)
-        full_thought = "".join(thought_chunks)
+        full_text = "".join(str(c) for c in text_chunks if c is not None)
+        full_thought = "".join(str(c) for c in thought_chunks if c is not None)
         if full_text:
             memory.add_message("assistant", full_text, mode=mode, session_id=session_id)
         token_tracker.record_turn(prompt_text=current_prompt, response_text=full_text, thought_text=full_thought)
@@ -3244,11 +3269,23 @@ async def api_image_upload(file: UploadFile = File(...)):
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 class ImageStudioExecuteRequest(BaseModel):
-    mode: str = "compose" # compose, edit, photo, gen
+    mode: str = "compose" # compose, edit, photo, gen, dressup
     prompt: str = ""
     image_paths: List[str] = []
     style: Optional[str] = "photoreal"
     aspect_ratio: Optional[str] = "1:1"
+    outfit: Optional[str] = ""
+    background: Optional[str] = ""
+    mood_or_pose: Optional[str] = ""
+    auto_crop_black_bars: Optional[bool] = True
+
+class ImageDressupRequest(BaseModel):
+    image_paths: List[str] = []
+    outfit: Optional[str] = ""
+    background: Optional[str] = ""
+    mood_or_pose: Optional[str] = ""
+    output_filename: Optional[str] = ""
+    auto_crop_black_bars: Optional[bool] = True
 
 @app.post("/api/image/studio/execute")
 async def api_image_studio_execute(req: ImageStudioExecuteRequest):
@@ -3256,7 +3293,18 @@ async def api_image_studio_execute(req: ImageStudioExecuteRequest):
     try:
         from tools.media_tools import ImageStudioEngine
 
-        if req.mode == "compose":
+        if req.mode == "dressup":
+            if not req.image_paths:
+                return JSONResponse(status_code=400, content={"success": False, "error": "着せ替え対象のリファレンス画像が必要です。"})
+            res = await asyncio.to_thread(
+                ImageStudioEngine.face_lock_dressup,
+                image_paths=req.image_paths,
+                outfit=req.outfit or req.prompt,
+                background=req.background or "",
+                mood_or_pose=req.mood_or_pose or "",
+                auto_crop_black_bars=req.auto_crop_black_bars if req.auto_crop_black_bars is not None else True
+            )
+        elif req.mode == "compose":
             if len(req.image_paths) < 2:
                 return JSONResponse(status_code=400, content={"success": False, "error": "合成には2枚以上の画像が必要です。"})
             res = await asyncio.to_thread(
@@ -3293,6 +3341,113 @@ async def api_image_studio_execute(req: ImageStudioExecuteRequest):
             res["preview_url"] = f"/api/media/file/image/{fname}"
 
         return res
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.post("/api/image/dressup")
+async def api_image_dressup(req: ImageDressupRequest):
+    """AI美女モデルの顔立ち完全固定（Character DNA保持）・衣装＆背景着せ替え専用エンドポイント"""
+    try:
+        from tools.media_tools import ImageStudioEngine, IMAGES_DIR
+        valid_paths = [p for p in req.image_paths if os.path.isfile(p)]
+        if not valid_paths:
+            # 自動フォールバック探索: 金型モデルまたは最新スクショ
+            gold_model = os.path.join(IMAGES_DIR, "ref_model_closeup.png")
+            if os.path.isfile(gold_model):
+                valid_paths = [gold_model]
+            else:
+                for ss_dir in ["/storage/emulated/0/Pictures/Screenshots", os.path.expanduser("~/storage/pictures/Screenshots")]:
+                    if os.path.isdir(ss_dir):
+                        candidates = [os.path.join(ss_dir, f) for f in os.listdir(ss_dir) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+                        if candidates:
+                            candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                            valid_paths = [candidates[0]]
+                            break
+        if not valid_paths:
+            return JSONResponse(status_code=400, content={"success": False, "error": "リファレンス画像が見つかりません。画像をアップロードまたは選択してください。"})
+
+        res = await asyncio.to_thread(
+            ImageStudioEngine.face_lock_dressup,
+            image_paths=valid_paths,
+            outfit=req.outfit or "",
+            background=req.background or "",
+            mood_or_pose=req.mood_or_pose or "",
+            output_filename=req.output_filename or "",
+            auto_crop_black_bars=req.auto_crop_black_bars if req.auto_crop_black_bars is not None else True
+        )
+        if res.get("success") and res.get("file_path"):
+            fname = os.path.basename(res["file_path"])
+            res["preview_url"] = f"/api/media/file/image/{fname}"
+        return res
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@app.get("/api/image/dressup/references")
+async def api_image_dressup_references():
+    """着せ替え用リファレンス画像（最新スクショ・金型モデル・モデル履歴）候補一覧を返却"""
+    try:
+        from tools.media_tools import IMAGES_DIR
+        result = {
+            "latest_screenshot": None,
+            "gold_model": None,
+            "recent_models": [],
+            "recent_screenshots": []
+        }
+
+        # 1. 金型モデル
+        gold_path = os.path.join(IMAGES_DIR, "ref_model_closeup.png")
+        if os.path.isfile(gold_path):
+            result["gold_model"] = {
+                "name": "ref_model_closeup.png",
+                "label": "⭐ 金型モデル (黄金比・至高清楚系)",
+                "path": gold_path,
+                "preview_url": "/api/media/file/image/ref_model_closeup.png"
+            }
+
+        # 2. スクリーンショット探索
+        ss_dirs = [
+            "/storage/emulated/0/Pictures/Screenshots",
+            os.path.expanduser("~/storage/pictures/Screenshots"),
+            "/sdcard/Pictures/Screenshots"
+        ]
+        found_ss = []
+        for d in ss_dirs:
+            if os.path.isdir(d):
+                try:
+                    for f in os.listdir(d):
+                        if f.lower().endswith((".png", ".jpg", ".jpeg")):
+                            fp = os.path.join(d, f)
+                            found_ss.append((fp, f, os.path.getmtime(fp)))
+                except Exception:
+                    pass
+        if found_ss:
+            found_ss.sort(key=lambda x: x[2], reverse=True)
+            top = found_ss[0]
+            result["latest_screenshot"] = {
+                "name": top[1],
+                "label": f"📸 最新スクショ ({top[1]})",
+                "path": top[0],
+                "preview_url": f"/api/media/file/image/{top[1]}"
+            }
+            result["recent_screenshots"] = [
+                {"name": x[1], "path": x[0], "preview_url": f"/api/media/file/image/{x[1]}"}
+                for x in found_ss[:6]
+            ]
+
+        # 3. 直近モデル履歴 (IMAGES_DIR 内)
+        if os.path.isdir(IMAGES_DIR):
+            model_files = []
+            for f in os.listdir(IMAGES_DIR):
+                if f.lower().endswith((".png", ".jpg", ".jpeg")) and not f.startswith("test_"):
+                    fp = os.path.join(IMAGES_DIR, f)
+                    model_files.append((fp, f, os.path.getmtime(fp)))
+            model_files.sort(key=lambda x: x[2], reverse=True)
+            result["recent_models"] = [
+                {"name": x[1], "path": x[0], "preview_url": f"/api/media/file/image/{x[1]}"}
+                for x in model_files[:8]
+            ]
+
+        return {"success": True, **result}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
@@ -3373,6 +3528,48 @@ async def api_list_skills():
             "categories": cats,
             "skills": skills
         }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "success": False, "error": str(e)})
+
+@app.post("/api/skills/reload")
+@app.get("/api/skills/reload")
+async def api_reload_skills():
+    """TUGUMIv6 全SKILLおよび常駐セッションの無停止ホットリロード"""
+    try:
+        from core.capability_inspector import SkillInspector
+        inspector = SkillInspector()
+        skills = await asyncio.to_thread(inspector.list_skills)
+        if hasattr(engine, "reload_skills"):
+            engine.reload_skills()
+        return {
+            "status": "ok",
+            "success": True,
+            "message": "SKILLホットリロード完了",
+            "total": len(skills),
+            "skills": skills
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "success": False, "error": str(e)})
+
+@app.post("/api/skills/assimilate")
+async def api_assimilate_skill(req: Request):
+    """外部スキルのTermux適合性審査・純化・安全配備"""
+    try:
+        data = await req.json()
+        source_path = data.get("source_path", "").strip()
+        custom_name = data.get("custom_name")
+        overwrite = bool(data.get("overwrite", False))
+
+        if not source_path:
+            return JSONResponse(status_code=400, content={"status": "error", "success": False, "error": "source_path is required"})
+
+        from core.skill_assimilator import SkillAssimilator
+        assimilator = SkillAssimilator()
+        res = await asyncio.to_thread(assimilator.purify_and_install, source_path, custom_name=custom_name, overwrite=overwrite)
+        if res.get("success"):
+            if hasattr(engine, "reload_skills"):
+                engine.reload_skills()
+        return res
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "success": False, "error": str(e)})
 
@@ -3562,6 +3759,17 @@ async def api_get_media_file(file_type: str, filename: str):
         file_path = os.path.join(IMAGES_DIR, "uploads", clean_name)
     if not os.path.isfile(file_path) and file_type == "image":
         file_path = os.path.join(UI_DESIGN_DIR, clean_name)
+    if not os.path.isfile(file_path) and file_type == "image":
+        for ss_dir in [
+            "/storage/emulated/0/Pictures/Screenshots",
+            os.path.expanduser("~/storage/pictures/Screenshots"),
+            "/sdcard/Pictures/Screenshots"
+        ]:
+            if os.path.isdir(ss_dir):
+                candidate = os.path.join(ss_dir, clean_name)
+                if os.path.isfile(candidate):
+                    file_path = candidate
+                    break
 
     if not os.path.isfile(file_path):
         return JSONResponse(status_code=404, content={"error": "File not found"})

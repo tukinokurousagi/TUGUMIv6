@@ -2598,6 +2598,46 @@ async def recall_similar_memories(req: RecallMemoryRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+# ━━━ 3072次元ハイブリッドRAG API ━━━
+
+@app.get("/api/rag/status")
+async def api_rag_status(folder: Optional[str] = None):
+    """3072次元ハイブリッドRAGステータスおよびインデックス済みファイル一覧返却"""
+    try:
+        summary = await asyncio.to_thread(rag.get_status_summary)
+        files = await asyncio.to_thread(rag.list_indexed_files, folder_filter=folder)
+        return {
+            "status": "ok",
+            "summary": summary,
+            "files": files
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+@app.post("/api/rag/sync")
+async def api_rag_sync():
+    """TUGUMI_RAGフォルダを完全スキャン・3072次元ベクトル＆FTS5インデックス化"""
+    try:
+        summary = await asyncio.to_thread(rag.ingest_all, max_files=10000, force=False, embed_missing=False)
+        return {
+            "status": "ok",
+            "summary": summary
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+@app.post("/api/rag/search")
+async def api_rag_search(req: SearchRequest):
+    """3072次元ハイブリッドRAG (BM25 + Dense Vector + RRF) 検索"""
+    try:
+        results = await asyncio.to_thread(rag.search_hybrid, req.query, top_k=req.top_k or 5)
+        return {
+            "status": "ok",
+            "results": results
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
 @app.post("/api/memory/search")
 async def search_knowledge(req: SearchRequest):
     try:

@@ -4,6 +4,8 @@
   "api_key": "",
   "gemini_model": "gemini-3.8-flash",
   "thinking_level": "high",
+  "show_thinking": true,
+  "stream_thinking": true,
   "fallback_model": "gemini-3.8-flash",
   "fallback_model_lite": "gemini-3.8-flash",
   "embedding_model": "gemini-embedding-2",

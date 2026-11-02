@@ -12,6 +12,7 @@
 
 import sys
 import os
+import signal
 import argparse
 import time
 import re
@@ -50,6 +51,7 @@ from core.verifier import SystemVerifier
 from core.autoheal import AutoHealEngine
 from core.supervisor import Supervisor
 from core.termux_doctor import TermuxDoctor
+from core.capability_inspector import SkillInspector
 from persona.soul import get_system_prompt
 from persona.context_compressor import ContextCompressor
 from memory.sqlite_memory import SQLiteMemory
@@ -416,7 +418,6 @@ def _cleanup_ephemeral_tor(proc: object, console: Console) -> None:
 def handle_robin_command(user_input: str, console: Console, session: PromptSession, inspector: ToolInspector, memory: SQLiteMemory, curr_mode: str = "light") -> None:
     """Robin MCP Dark Web OSINT Suite スラッシュコマンド統合ハンドラ (/robin)"""
     from tools.tugumi_mcp import mcp as tugumi_mcp
-    from rich.markdown import Markdown
 
     p = CYBER_PALETTES.get(curr_mode, CYBER_PALETTES["light"])
     raw_args = user_input[len("/robin"):].strip()
@@ -750,6 +751,10 @@ def run_cli():
     parser.add_argument("--self-test", action="store_true", help="Run automated self-test and exit")
     parser.add_argument("-m", "--model", type=str, default=None, help="Specify Gemini model (e.g. gemini-4-argon, gemini-3.8-flash)")
     parser.add_argument("-t", "--thinking", type=str, choices=["high", "medium", "low", "minimal"], default=None, help="Specify thinking intensity")
+    parser.add_argument("--show-thinking", action="store_true", default=None, help="Explicitly enable thought process visibility")
+    parser.add_argument("--no-thinking", action="store_true", help="Disable thought process visibility")
+    parser.add_argument("--stream-thinking", action="store_true", default=None, help="Enable real-time thinking stream display")
+    parser.add_argument("--no-stream-thinking", action="store_true", help="Disable real-time thinking stream (summary panel only)")
     parser.add_argument("-q", "--quiet", "--raw", action="store_true", dest="quiet", help="Quiet/raw output without banner/HUD (ideal for piping)")
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming output")
     args = parser.parse_args()
@@ -873,8 +878,30 @@ def run_cli():
     # 2. UI/UX エンジン初期化 (デフォルト: つぐみ 表の通常モード / --dark 指定時のみダークモード)
     curr_mode = "dark" if getattr(args, "dark", False) else "light"
     console = get_rich_console(curr_mode)
+    # 思考プロセスの可視化・ストリーミング設定 (デフォルト有効: 思考の透明性維持)
+    cfg_show_th = engine.config.get("show_thinking", True)
+    if getattr(args, "no_thinking", False):
+        show_thinking_val = False
+    elif getattr(args, "show_thinking", False):
+        show_thinking_val = True
+    else:
+        show_thinking_val = cfg_show_th
+
+    cfg_stream_th = engine.config.get("stream_thinking", True)
+    if getattr(args, "no_stream_thinking", False):
+        stream_thinking_val = False
+    elif getattr(args, "stream_thinking", False):
+        stream_thinking_val = True
+    else:
+        stream_thinking_val = cfg_stream_th
+
     inspector = ToolInspector(console, mode=curr_mode)
-    thinking_viewer = ThinkingViewer(console, mode=curr_mode)
+    thinking_viewer = ThinkingViewer(
+        console,
+        mode=curr_mode,
+        show_thinking=show_thinking_val,
+        stream_thinking=stream_thinking_val
+    )
     status_dock = StatusDock(console)
     token_tracker = TokenCostTracker()
 
@@ -2082,12 +2109,36 @@ def run_cli():
                     target_level = "minimal"
                 elif len(parts) >= 2:
                     sub = parts[1].lower()
+                    if sub == "stream":
+                        action = parts[2].lower() if len(parts) >= 3 else ("off" if thinking_viewer.stream_thinking else "on")
+                        if action in ("on", "1", "true", "enable"):
+                            thinking_viewer.stream_thinking = True
+                            thinking_viewer.show_thinking = True
+                            console.print("[bold green]✔ 思考プロセスのリアルタイムストリーミング出力を【ON】に設定しました。[/bold green]\n")
+                        else:
+                            thinking_viewer.stream_thinking = False
+                            console.print("[bold yellow]✔ 思考プロセスのリアルタイムストリーミングを【OFF】にしました（完了時サマリーパネルのみ表示）。[/bold yellow]\n")
+                        continue
+                    elif sub in ("show", "on"):
+                        thinking_viewer.show_thinking = True
+                        console.print("[bold green]✔ 思考プロセスの可視化を【ON】に設定しました。[/bold green]\n")
+                        continue
+                    elif sub in ("hide", "off"):
+                        thinking_viewer.show_thinking = False
+                        console.print("[bold yellow]✔ 思考プロセスの可視化を【OFF】に設定しました（最小バッジ表示）。[/bold yellow]\n")
+                        continue
+                    elif sub == "toggle":
+                        thinking_viewer.show_thinking = not thinking_viewer.show_thinking
+                        st_txt = "ON" if thinking_viewer.show_thinking else "OFF"
+                        console.print(f"[bold cyan]✔ 思考プロセスの可視化を【{st_txt}】に切り替えました。[/bold cyan]\n")
+                        continue
+
                     mapping = {"h": "high", "m": "medium", "l": "low", "min": "minimal"}
                     norm = mapping.get(sub, sub)
                     if norm in ("high", "medium", "low", "minimal"):
                         target_level = norm
                     else:
-                        console.print(f"[bold red]✖ 無効な思考レベルです: {parts[1]}[/bold red] (利用可能: high, medium, low, minimal)\n")
+                        console.print(f"[bold red]✖ 無効な思考レベルまたはサブコマンドです: {parts[1]}[/bold red] (利用可能: high, medium, low, minimal / stream on|off, show, hide, toggle)\n")
                         continue
                 else:
                     # 引数なしの場合: リッチな選択HUDを表示
@@ -2753,13 +2804,15 @@ def run_cli():
                 prompt_parts.append(f"【参考：関連長期記憶】\n{memory_context}")
             current_prompt = "\n\n".join(prompt_parts)
 
-            # 6. 推論 & ストリーミング生成（ESC一時停止・リアルタイムSteering対応）
+            # 6. 推論 & ストリーミング生成（ESC一時停止・リアルタイムSteering・タイムアウト自律リカバリ対応）
+            timeout_recovery_count = 0
             while True:
                 thought_accumulator = []
                 text_accumulator = []
                 start_time = time.time()
                 is_cancelled = False
                 resumed_prompt = None
+                timed_out_error = None
 
                 last_tool_name = ""
                 speaker = "つぐみ🌸" if curr_mode == "light" else "ダークつぐみ⚡"
@@ -2895,9 +2948,19 @@ def run_cli():
                                 if status._live.is_started:
                                     status.stop()
                                 if "タイムアウト" in str(chunk_data):
-                                    console.print(f"\n[bold red]✖ 通信遮断リカバリ: {chunk_data}[/bold red]")
-                                    console.print("[dim cyan]› ハングを安全に自動遮断しました。セッションをリセットして次の指示を受け付けます。[/dim cyan]\n")
-                                    engine.reset_session(system_instruction=system_prompt)
+                                    timed_out_error = str(chunk_data)
+                                    console.print(f"\n[bold red]✖ 実行時間超過保護: {chunk_data}[/bold red]")
+                                    if hasattr(engine, "session") and engine.session:
+                                        try:
+                                            engine.session.cancel()
+                                        except Exception:
+                                            pass
+                                    memory.add_message(
+                                        "assistant",
+                                        f"【タイムアウト遮断記録】{chunk_data}。直前のツール: {last_tool_name or 'なし'}。文脈は保持されています。直ちに自律リカバリを実行します。",
+                                        mode=curr_mode
+                                    )
+                                    break
                                 elif "Persistent session stream fallback" not in str(chunk_data) and "fallback triggered" not in str(chunk_data):
                                     console.print(f"[bold yellow]⚠ {chunk_data}[/bold yellow]")
                             else:
@@ -2930,6 +2993,26 @@ def run_cli():
                     console.print("[yellow]拓磨様、タスクを中断いたしました。[/yellow]\n")
                     memory.add_message("assistant", f"【タスク中断記録】拓磨様によりESC中断されました。直前の実行ツール: {last_tool_name or 'なし'}。拓磨様から中断理由や状況を問われた際は、この経緯を隠さず100%誠実に即答してください。", mode=curr_mode)
                     break
+
+                if timed_out_error:
+                    if timeout_recovery_count < 2:
+                        timeout_recovery_count += 1
+                        console.print(f"[bold yellow]🔄 【自律リカバリ自動発動（試行 {timeout_recovery_count}/2）】[/bold yellow] [dim cyan]タイムアウト（{timed_out_error}）を検知。作業を中断・放棄せず、代替手段・軽量化・高速フラグを自律適用してタスクを即座に継続完遂いたします...[/dim cyan]\n")
+                        prev_text = "".join(text_accumulator).strip()
+                        current_prompt = (
+                            f"【🚨 システム自律自己修復指令（タイムアウト自動リカバリ・継続完遂マンデート）】\n"
+                            f"直前の処理（直前の実行ツール: {last_tool_name or 'コマンド実行/推論'}）が時間超過（{timed_out_error}）により安全遮断されました。\n"
+                            f"【最重要】作業を中断・放棄して立ち止まる行為は論外であり絶対に禁止です。直ちに自律的に以下のリカバリ行動を取ってください：\n"
+                            f"1. 【タイムアウト原因の特定】: サーバー未起動時の自動待機、長大なテスト、過剰な入出力等の要因を即座に看破せよ。\n"
+                            f"2. 【代替アプローチの即座実行】: 同一の重いコマンドや処理を絶対に繰り返すな。高速クラウドフラグ（例: `--cloud`, `--fast`）、サーバー未起動防止フラグ（`--no-auto-start`）、ピンポイントな単体テスト、または非同期バックグラウンド実行（`nohup ... &`）等の軽量・確実な代替手段に即座に切り替えよ。\n"
+                            f"3. 【自律完遂】: 拓磨様の手を煩わせることなく、当初の目的（ゴール: 「{user_input}」）を客観的証拠（Exit Code 0）が得られるまで最後まで完遂せよ。\n\n"
+                            f"【当初の全体ゴール】:\n{user_input}\n\n"
+                            f"【タイムアウト直前の途中経過】:\n{prev_text[:800] if prev_text else '（初期処理中）'}"
+                        )
+                        continue
+                    else:
+                        console.print("\n[bold red]⚠ 連続タイムアウトを検知いたしました。安全のため拓磨様へ制御を委譲いたします。[/bold red]\n")
+                        break
 
                 if resumed_prompt:
                     # 拓磨様からの追加・軌道修正指示を最優先に統合し、文脈（メモリ・ツール履歴）を完全維持したまま即座に方針を切り替えてタスク続行！

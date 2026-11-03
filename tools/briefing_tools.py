@@ -92,9 +92,12 @@ class BriefingTools:
         try:
             with open(latest_file, "r", encoding="utf-8") as f:
                 content = f.read()
+            html_candidate = latest_file.replace(".md", ".html")
+            html_path = html_candidate if os.path.exists(html_candidate) else None
             return {
                 "status": "success",
                 "filepath": latest_file,
+                "html_filepath": html_path,
                 "filename": os.path.basename(latest_file),
                 "mtime": os.path.getmtime(latest_file),
                 "content": content

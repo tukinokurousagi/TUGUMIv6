@@ -138,6 +138,19 @@ class TestCliWebUiBugfixAndHygiene(unittest.TestCase):
         self.assertIsNotNone(res_typo)
         self.assertIn("/status", res_typo.get("reply", ""))
 
+        # /reload and /skill <name> detail inspection parity
+        res_reload = execute_slash_command("/reload", mode="light", session_id="test_sess")
+        self.assertIsNotNone(res_reload)
+        self.assertIn("無停止ホットリロード完了", res_reload.get("reply", ""))
+
+        res_skill_detail = execute_slash_command("/skill agent-craftsman", mode="light", session_id="test_sess")
+        self.assertIsNotNone(res_skill_detail)
+        self.assertIn("SKILL Inspector: `agent-craftsman`", res_skill_detail.get("reply", ""))
+
+        # /skill <name> <task> returns None so chat handler injects SKILL.md into LLM stream
+        res_skill_exec = execute_slash_command("/skill agent-craftsman テストタスク", mode="light", session_id="test_sess")
+        self.assertIsNone(res_skill_exec)
+
     def test_webui_image_generate_and_frontend_fixes(self):
         web_src = (ROOT_DIR / "interfaces/web/web_server.py").read_text(encoding="utf-8")
         html_src = (ROOT_DIR / "interfaces/web/templates/index.html").read_text(encoding="utf-8")

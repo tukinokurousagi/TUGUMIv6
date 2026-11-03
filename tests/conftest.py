@@ -5,19 +5,55 @@ pytest 実行時に外部の Gemini API へ課金リクエストが送信され�
 """
 import sys
 from pathlib import Path
+
 import pytest
-from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 @pytest.fixture(autouse=True)
-def block_unintended_paid_api_in_tests(monkeypatch):
-    """テスト実行中の意図しない実API連打（TTS・画像生成・Embedding・LLM・Antigravity）をローカルで安全にモック化"""
+def block_unintended_paid_api_in_tests(monkeypatch, tmp_path_factory):
+    """テスト実行中の意図しない実API連打（TTS・画像生成・Lyria作曲・Embedding・LLM・Antigravity）をローカルで安全にモック化し、
+    本番ディレクトリ（TUGUMIDesk）へのテストゴミ書き込みを物理隔離する。"""
     from core.gemini_client import GeminiClient
     monkeypatch.setattr(GeminiClient, "generate_content", lambda self, prompt, *a, **kw: f"[Test Mode Response] {str(prompt)[:50]}")
     monkeypatch.setattr(GeminiClient, "generate_content_stream", lambda self, prompt, *a, **kw: iter([("text", f"[Test Mode Stream] {str(prompt)[:50]}")]))
     monkeypatch.setattr(GeminiClient, "embed_text", lambda self, text, *a, **kw: [0.01] * 3072)
     monkeypatch.setattr(GeminiClient, "embed_texts_batch", lambda self, texts, *a, **kw: [[0.01] * 3072 for _ in texts])
+
+    # 1. テスト専用の一時メディアディレクトリを用意し、本番の TUGUMIDesk 汚染を物理遮断
+    test_media_dir = tmp_path_factory.mktemp("tugumi_test_media")
+    test_music_dir = test_media_dir / "music"
+    test_images_dir = test_media_dir / "images"
+    test_music_dir.mkdir(parents=True, exist_ok=True)
+    test_images_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import tools.media_tools as mt
+        monkeypatch.setattr(mt, "MUSIC_DIR", str(test_music_dir))
+        monkeypatch.setattr(mt, "IMAGES_DIR", str(test_images_dir))
+
+        # 2. tools.media_tools の実APIクライアントを完全モック化（Lyria / Gemini Image / TTS の課金を物理遮断）
+        class MockGenAIModels:
+            def generate_content(self, model, contents, *a, **kw):
+                class MockContentResp:
+                    text = "[Mocked Lyrics/Response in Test Mode]"
+                return MockContentResp()
+
+            def generate_images(self, *a, **kw):
+                class MockImg:
+                    image_bytes = b"MOCK_PNG"
+                class MockImgResp:
+                    def __init__(self):
+                        self.generated_images = [MockImg()]
+                return MockImgResp()
+
+        class MockGenAIClient:
+            def __init__(self, *a, **kw):
+                self.models = MockGenAIModels()
+
+        monkeypatch.setattr(mt, "_get_genai_client", lambda: MockGenAIClient())
+    except (ImportError, AttributeError):
+        pass
 
     try:
         from core.antigravity_sdk import AntigravityEngine

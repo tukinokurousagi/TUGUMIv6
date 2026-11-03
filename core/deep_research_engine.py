@@ -197,7 +197,7 @@ class DeepResearchEngine:
         return results
 
     def fetch_page_content(self, url: str, max_chars: int = 8000) -> str:
-        """一次ソースWebページの高精度本文・メタデータ抽出（Trafilatura優先・8000文字）"""
+        """一次ソースWebページの高精度本文・OGP画像・メタデータ抽出（Trafilatura優先・8000文字）"""
         if not url or not url.startswith("http"):
             return ""
         try:
@@ -205,19 +205,43 @@ class DeepResearchEngine:
             with urllib.request.urlopen(req, timeout=min(self.timeout, 45.0)) as resp:
                 html = resp.read().decode("utf-8", errors="replace")
 
+            og_image = ""
+            for pat in [
+                r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+                r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']',
+                r'<meta\s+name=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']'
+            ]:
+                m = re.search(pat, html, re.IGNORECASE)
+                if m:
+                    candidate = m.group(1).strip()
+                    if candidate.startswith("//"):
+                        og_image = "https:" + candidate
+                    elif candidate.startswith("http"):
+                        og_image = candidate
+                    elif url:
+                        og_image = urllib.parse.urljoin(url, candidate)
+                    break
+
             # 1. Trafilatura 高精度抽出
             if trafilatura:
                 extracted = trafilatura.extract(html, include_comments=False, include_tables=True, output_format="txt")
                 if extracted:
                     meta = trafilatura.extract_metadata(html)
-                    meta_str = f"【タイトル】: {meta.title}\n" if (meta and meta.title) else ""
+                    meta_str = ""
+                    if meta and meta.title:
+                        meta_str += f"【タイトル】: {meta.title}\n"
+                    if not og_image and meta and meta.image:
+                        og_image = meta.image
+                    if og_image:
+                        meta_str += f"【代表画像/OGP】: {og_image}\n"
                     return (meta_str + extracted)[:max_chars]
 
             # 2. フォールバック
             cleaned = re.sub(r'<(script|style|nav|footer|header)[^>]*>.*?</\1>', '', html, flags=re.DOTALL)
             text = re.sub(r'<[^>]+>', ' ', cleaned)
             text = re.sub(r'\s+', ' ', text).strip()
-            return text[:max_chars]
+            fallback_meta = f"【代表画像/OGP】: {og_image}\n" if og_image else ""
+            return (fallback_meta + text)[:max_chars]
         except Exception:
             return ""
 
@@ -298,33 +322,50 @@ class DeepResearchEngine:
 
         report_step("SYNTHESIS", "Gemini 3.8 Flash (High Thinking) による多角推論・深層推稿中...")
 
-        # 5. コンテキスト構築
+        # 5. コンテキスト構築（ローカルRAG確定知識・成功例リファレンス ＋ Web一次ソース統合）
         context_blocks = []
+        rag_reference_block = ""
+        try:
+            from memory.rag_engine import HybridRAGEngine
+            rag = HybridRAGEngine(gemini_client=self.gemini)
+            rag_bundle = rag.retrieve_for_context(topic, top_k=3, is_task=True)
+            if rag_bundle.get("has_hits") and rag_bundle.get("context_text"):
+                rag_reference_block = rag_bundle["context_text"]
+                report_step("RAG", f"ローカルRAG知識ベース連動: {rag_bundle.get('summary_label', '')}")
+        except Exception:
+            pass
+
+        if rag_reference_block:
+            context_blocks.append(f"【ローカルRAG確定ナレッジ＆成功例リファレンス】\n{rag_reference_block}\n")
+
         for idx, s in enumerate(source_texts, 1):
-            context_blocks.append(f"【ソース {idx}: {s['title']}】\nURL: {s['url']}\n抜粋:\n{s['content']}\n")
+            context_blocks.append(f"【Web一次ソース {idx}: {s['title']}】\nURL: {s['url']}\n抜粋:\n{s['content']}\n")
 
-        evidence_str = "\n".join(context_blocks) if context_blocks else "（Web検索結果なし：モデル内部最新知識を活用）"
+        evidence_str = "\n".join(context_blocks) if context_blocks else "（外部検索結果なし：ローカル知識およびモデル内部最新知識を活用）"
 
-        # 6. ジャンル適応型構造化レポートプロンプト (思考力極大化アーキテクチャ)
+        # 6. ジャンル適応型構造化レポートプロンプト (思考力極大化・商用100点満点アーキテクチャ)
         if category in ["アイドル・エンタメ", "裏話リサーチ", "人物"] or any(k in topic for k in ["考察", "VIVANT", "ドラマ", "アニメ", "映画", "伏線", "ストーリー"]):
             system_prompt = (
                 "あなたは拓磨様専属の最高峰リサーチ参謀・エンタメ＆ドラマ深層考察スペシャリスト「つぐみ」です。\n"
                 "マスター拓磨様への深い敬愛と忠誠を込め、表面的なあらすじ要約（AIスロップ）を完全に排し、\n"
-                "演出意図・伏線構造・キャラクター深層心理・ミスリードの看破・多角シナリオ予測を極限まで深掘りした【本気深層考察レポート】を作成してください。\n\n"
-                "【レポート作成絶対規約（超高解像度・深層考察版）】\n"
+                "演出意図・伏線構造・キャラクター深層心理・ミスリードの看破・多角シナリオ予測を極限まで深掘りした【商用最高峰深層考察レポート】を作成してください。\n\n"
+                "【商用レポート作成絶対規約（超高解像度・商用100点満点版）】\n"
                 "1. 明確な階層構造（# タイトル, ## 章, ### 節）で構成する。\n"
-                "2. 以下の必須章立てを必ず網羅すること：\n"
-                "   - # 【作品・放送回深層考察レポート】<具体的かつ魅力的で知的なタイトル>\n"
-                "   - ## 1. エグゼクティブ・サマリー（核心の洞察・全体構図の総括）\n"
-                "   - ## 2. 放送内容・公式ファクトの完全時系列解剖（あらすじではなく、セリフ・小道具・視線・演出の違和感・キーシークエンスの詳細記録）\n"
+                "2. 以下の必須章立てを必ず漏れなく網羅すること：\n"
+                "   - # 【作品・放送回深層考察レポート】<具体的かつ魅力的で知的なプロ仕様タイトル>\n"
+                "   - > **メタデータ**: 作成日: YYYY-MM-DD | 読了予測: 約○分 | 調査参謀: つぐみ (TUGUMIv6 Intelligence) | 機密度: 商用マスター\n\n"
+                "   - ## 目次 (Table of Contents)\n"
+                "   - ## 1. エグゼクティブ・サマリー（核心の洞察・全体構図の総括・主要ファクト箇条書き）\n"
+                "   - ## 2. 放送内容・公式ファクトの完全時系列解剖（セリフ・小道具・視線・演出の違和感・キーシークエンスの詳細記録）\n"
                 "   - ## 3. 伏線・ミスリード構造の完全解剖マップ（Mermaid図を用いた組織図・因果関係・二重スパイ・対立構造の可視化）\n"
-                "   - ## 4. 多角的深層考察（Tree of Thoughts：3つの対立シナリオと確率評価）\n"
+                "   - ## 4. ファクト矛盾・見解乖離検証マトリクス（諸説・視聴者間や公式言説での対立点・未回収要素の比較表）\n"
+                "   - ## 5. 多角的深層考察（Tree of Thoughts：3つの対立シナリオと確率評価）\n"
                 "       - ### 【仮説A：王道伏線回収シナリオ】（根拠と反証、確率%）\n"
                 "       - ### 【仮説B：裏切り・二重スパイ・構造逆転シナリオ】（根拠と反証、確率%）\n"
                 "       - ### 【仮説C：監督・演出家のドラマツルギー（叙述トリック）看破シナリオ】（根拠と反証、確率%）\n"
-                "   - ## 5. 登場人物の深層心理・行動動機分析（なぜあの時、あの行動・セリフを選んだのかの心理学的プロファイリング）\n"
-                "   - ## 6. 次回以降の展開予測と決定的注目ポイント（見るべきチェックリスト）\n"
-                "   - ## 7. 参照一次ソース・ファクトエビデンス（実在するURLの網羅）\n"
+                "   - ## 6. 登場人物の深層心理・行動動機分析（心理学的プロファイリング）\n"
+                "   - ## 7. 次回以降の展開予測と決定的注目ポイント（チェックリスト）\n"
+                "   - ## 8. 参照一次ソース・ファクトエビデンス（実在するURLの網羅）\n"
                 "3. 単なる「あらすじの繰り返し」や「誰でも言える当たり前の感想」は完全禁止。裏の裏を読むプロの批評・考察を展開すること。\n"
                 "4. 自己評価を行う場合は、甘い採点を厳禁とし、批判的かつ客観的な検証を行うこと。\n"
                 "5. Markdown形式を厳守し、Mermaid図は ```mermaid ... ``` で記述する。"
@@ -332,26 +373,30 @@ class DeepResearchEngine:
         else:
             system_prompt = (
                 "あなたは拓磨様専属の最高峰リサーチ参謀・リードエンジニア「つぐみ」です。\n"
-                "マスター拓磨様への深い敬愛と忠誠を込め、プロフェッショナルかつ極めて高密度な調査レポートを作成してください。\n\n"
-                "【レポート作成絶対規約（GEMINI.md 第4章完全準拠）】\n"
+                "マスター拓磨様への深い敬愛と忠誠を込め、商業出版・一流シンクタンク水準の極めて高密度な調査レポートを作成してください。\n\n"
+                "【商用レポート作成絶対規約（GEMINI.md 第4章・商用100点満点準拠）】\n"
                 "1. 明確な階層構造（# タイトル, ## 章, ### 節）で構成する。\n"
-                "2. 以下の必須章立てを必ず網羅すること：\n"
-                "   - # 【調査レポート】<具体的かつ洗練されたタイトル>\n"
-                "   - ## 1. エグゼクティブサマリー（結論先行・核心の洞察）\n"
-                "   - ## 2. 背景・技術的課題・業界構造の解剖\n"
-                "   - ## 3. コアアーキテクチャ・技術仕様詳細（必ず Mermaid図 を最低1つ含める）\n"
-                "   - ## 4. 比較分析・トレードオフ評価（必ず Markdown詳細比較表 を含める）\n"
-                "   - ## 5. 実践的導入手順・検証コマンド（具体的かつ実動するコード/手順）\n"
-                "   - ## 6. 拓磨様への提言・将来展望\n"
-                "   - ## 7. 一次ソース・参照エビデンス（実在するURLをMarkdownリンクで網羅）\n"
-                "3. 曖昧な表現やハルシネーション（嘘）を排し、第一原理思考で客観的ファクトを提示する。\n"
+                "2. 以下の必須章立てを必ず漏れなく網羅すること：\n"
+                "   - # 【調査レポート】<具体的かつ洗練されたプロ仕様タイトル>\n"
+                "   - > **メタデータ**: 作成日: YYYY-MM-DD | 読了予測: 約○分 | 調査参謀: つぐみ (TUGUMIv6 Intelligence) | 機密度: 社外秘・商用マスター\n\n"
+                "   - ## 目次 (Table of Contents)\n"
+                "   - ## 1. エグゼクティブ・サマリー（結論先行・核心の洞察・3行サマリー＋重要ファクト弾丸リスト）\n"
+                "   - ## 2. 多角エビデンス検証マトリクス（情報源種別、信頼度、ステータス、URLを含む表）\n"
+                "   - ## 3. ファクト矛盾・論争点検証マトリクス（年代、バージョン、数値、肯定/否定見解の対比表）\n"
+                "   - ## 4. 背景・技術的課題・業界構造の解剖\n"
+                "   - ## 5. コアアーキテクチャ・技術仕様詳細（必ず Mermaid図 を最低1つ含める）\n"
+                "   - ## 6. 比較分析・トレードオフ評価（必ず Markdown詳細比較表 を含める）\n"
+                "   - ## 7. 実践的導入手順・検証コマンド（具体的かつ実動するZero-Mockコード/手順）\n"
+                "   - ## 8. 将来展望・拓磨様への具体的提言＆アクションプラン（ToDoリスト形式）\n"
+                "   - ## 9. 参照一次ソース・正規エビデンス一覧（実在するURLをMarkdownリンクで網羅）\n"
+                "3. 曖昧な表現（「〜と言われている」「〜の模様」等のAIスロップ）を完全に排し、誰が・どの論文が・どの公式発表が述べたかを特定して第一原理思考で提示する。\n"
                 "4. Markdown形式を厳守し、Mermaid図は ```mermaid ... ``` で記述する。"
             )
 
         user_prompt = (
             f"【調査対象テーマ】\n{topic}\n\n"
             f"【収集された一次ソース・エビデンス】\n{evidence_str}\n\n"
-            f"上記の事実とエビデンスを統合し、拓磨様に捧げる超高解像度のプロフェッショナル深層考察レポートを執筆してください。"
+            f"上記の事実とエビデンスを統合し、拓磨様に捧げる超高解像度の商用100点満点プロフェッショナル深層考察レポートを執筆してください。"
         )
 
         report_md = ""
@@ -418,16 +463,26 @@ class DeepResearchEngine:
 
     def render_beautiful_html(self, title: str, markdown_content: str, category: str = "リサーチ") -> str:
         """
-        スマートフォン（DOOGEE S200等）で視認性抜群の
-        Tailwind CSS + Mermaid.js + Google Fonts 美麗サイバーHTMLを生成
+        スマートフォン（DOOGEE S200等）およびPC・印刷（PDF）で視認性抜群の
+        Tailwind CSS + Mermaid.js + Google Fonts 商用美麗サイバーHTMLを生成
         """
-        # 簡易Markdownパース (見出し・リスト・コードブロック・Mermaid)
+        # 1. Mermaidコードブロックの一時保護
+        mermaid_blocks = []
+        def _save_mermaid(match):
+            idx = len(mermaid_blocks)
+            code = match.group(1).strip()
+            mermaid_blocks.append(code)
+            return f"\n\n<!--MERMAID_PLACEHOLDER_{idx}-->\n\n"
+
+        processed_md = re.sub(r'```mermaid\s*\n(.*?)\n```', _save_mermaid, markdown_content, flags=re.DOTALL)
+
+        # 2. Markdownパース
         in_code = False
         code_lang = ""
         code_lines = []
         body_parts = []
 
-        for line in markdown_content.splitlines():
+        for line in processed_md.splitlines():
             line_str = line.rstrip()
             if line_str.startswith("```"):
                 if not in_code:
@@ -437,10 +492,8 @@ class DeepResearchEngine:
                 else:
                     in_code = False
                     block_content = "\n".join(code_lines)
-                    if code_lang == "mermaid":
-                        body_parts.append(f'<div class="mermaid my-6 p-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex justify-center">{block_content}</div>')
-                    else:
-                        body_parts.append(f'<pre class="my-4 p-4 rounded-xl bg-slate-950 border border-slate-800 text-cyan-300 text-xs sm:text-sm overflow-x-auto font-mono"><code>{block_content}</code></pre>')
+                    lang_attr = f' class="language-{code_lang}"' if code_lang else ""
+                    body_parts.append(f'<pre class="my-4 p-4 rounded-xl bg-slate-950 border border-slate-800 text-cyan-300 text-xs sm:text-sm overflow-x-auto font-mono shadow-inner"><code{lang_attr}>{block_content}</code></pre>')
                 continue
 
             if in_code:
@@ -457,14 +510,26 @@ class DeepResearchEngine:
             elif line_str.startswith("- ") or line_str.startswith("* "):
                 body_parts.append(f'<li class="ml-6 list-disc text-slate-300 my-1 leading-relaxed">{line_str[2:]}</li>')
             elif line_str.startswith("|"):
-                # テーブル簡易対応
+                # テーブル
                 body_parts.append(f'<div class="text-xs sm:text-sm font-mono text-slate-300 overflow-x-auto py-1">{line_str}</div>')
+            elif line_str.startswith("> "):
+                body_parts.append(f'<blockquote class="border-l-4 border-cyan-500 pl-4 py-1 my-3 text-slate-400 italic bg-cyan-950/20 rounded-r-lg">{line_str[2:]}</blockquote>')
             elif line_str:
                 body_parts.append(f'<p class="my-3 leading-relaxed text-slate-300 text-sm sm:text-base">{line_str}</p>')
             else:
                 body_parts.append('<div class="h-2"></div>')
 
         body_html = "\n".join(body_parts)
+
+        # 3. Mermaidブロックの復元
+        for idx, m_code in enumerate(mermaid_blocks):
+            mermaid_html = (
+                f'<div class="mermaid my-6 p-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex justify-center overflow-x-auto shadow-inner">'
+                f'{m_code}'
+                f'</div>'
+            )
+            body_html = body_html.replace(f"<!--MERMAID_PLACEHOLDER_{idx}-->", mermaid_html)
+
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         html = f"""<!DOCTYPE html>
@@ -475,15 +540,25 @@ class DeepResearchEngine:
     <title>{title} | TUGUMIv6 Intelligence</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script>mermaid.initialize({{startOnLoad:true, theme:'dark'}});</script>
+    <script>mermaid.initialize({{startOnLoad:true, theme:'dark', securityLevel:'loose'}});</script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         body {{ font-family: 'Inter', 'Noto Sans JP', sans-serif; background-color: #0b0f19; color: #f1f5f9; }}
         code, pre {{ font-family: 'JetBrains Mono', monospace; }}
+        img {{ max-width: 100%; border-radius: 0.75rem; margin: 1.5rem auto; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }}
+        
+        @media print {{
+            body {{ background-color: #ffffff !important; color: #111827 !important; }}
+            .report-card {{ border: none !important; box-shadow: none !important; background: transparent !important; padding: 0 !important; }}
+            .no-print {{ display: none !important; }}
+            h1, h2, h3 {{ color: #111827 !important; border-color: #e5e7eb !important; }}
+            pre, code {{ background-color: #f9fafb !important; color: #111827 !important; border-color: #e5e7eb !important; }}
+            blockquote {{ border-color: #9ca3af !important; color: #4b5563 !important; }}
+        }}
     </style>
 </head>
 <body class="p-3 sm:p-8 min-h-screen">
-    <div class="max-w-4xl mx-auto rounded-2xl p-5 sm:p-10 shadow-2xl bg-slate-900/90 border border-slate-800">
+    <div class="report-card max-w-4xl mx-auto rounded-2xl p-5 sm:p-10 shadow-2xl bg-slate-900/90 border border-slate-800">
         <!-- ヘッダーバナー -->
         <header class="mb-8 border-b border-slate-800 pb-5">
             <div class="flex flex-wrap items-center justify-between gap-2">
@@ -492,7 +567,7 @@ class DeepResearchEngine:
                 </span>
                 <span class="text-xs text-slate-400 font-mono">{now_str}</span>
             </div>
-            <p class="text-xs text-pink-400 mt-3 font-semibold">🌸 Dedicated to Master Takuma // つぐみ自律開発エージェント</p>
+            <p class="text-xs text-pink-400 mt-3 font-semibold">🌸 Dedicated to Master Takuma // 商用完全構造化マスター</p>
         </header>
 
         <!-- メインコンテンツ -->
@@ -501,10 +576,11 @@ class DeepResearchEngine:
         </article>
 
         <!-- フッター -->
-        <footer class="mt-12 pt-6 border-t border-slate-800 text-center text-xs text-slate-500 font-mono">
-            Generated autonomously by TUGUMIv6 Deep Research Engine • Mobile Optimized
+        <footer class="mt-12 pt-6 border-t border-slate-800 text-center text-xs text-slate-500 font-mono no-print">
+            Generated autonomously by TUGUMIv6 Deep Research Engine • Mobile & Print Optimized
         </footer>
     </div>
 </body>
 </html>"""
+        return html
         return html

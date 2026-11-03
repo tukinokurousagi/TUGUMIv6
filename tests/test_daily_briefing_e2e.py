@@ -9,8 +9,7 @@ WebUIエンドポイント、および保存ロジックの厳格な検証。
 
 import os
 import sys
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 TUGUMI_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))

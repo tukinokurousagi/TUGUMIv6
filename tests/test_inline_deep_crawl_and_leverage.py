@@ -14,8 +14,6 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tools.antigravity_tools import (
-    web_search_duckduckgo,
-    fetch_url_text,
     verify_causal_leverage,
     get_tugumi_tools
 )

@@ -53,7 +53,7 @@ class FileTools:
             return cleaned
 
         junk_patterns = (".bak", ".orig", ".tmp_bak")
-        for root, dirs, files in os.walk(scan_dir):
+        for root, _dirs, files in os.walk(scan_dir):
             if any(p in root for p in [".git", "node_modules", ".gemini"]):
                 continue
             for f in files:

@@ -53,8 +53,8 @@ class CodingTools:
         numbered = [f"{i}: {line}" for i, line in enumerate(selected, start=start)]
         return "".join(numbered)
 
-    def surgical_replace(self, file_path: str, target_content: str, replacement_content: str) -> bool:
-        """外科的最小差分編集 (完全一致置換)"""
+    def surgical_replace(self, file_path: str, target_content: str, replacement_content: str) -> Dict[str, Any]:
+        """外科的最小差分編集 (完全一致置換 & 構文ゲート自動検証)"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
@@ -69,16 +69,48 @@ class CodingTools:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
 
-        return True
+        # 構文ゲート自動検証（エージェントによる手動 check_syntax 連打を不要化）
+        syntax_res = self.check_syntax(file_path)
+        return {
+            "success": True,
+            "file": file_path,
+            "syntax_valid": syntax_res.get("valid", True),
+            "syntax_error": syntax_res.get("error", "")
+        }
+
+    def write_file(self, file_path: str, content: str) -> Dict[str, Any]:
+        """新規ファイル作成または完全上書き & 構文ゲート自動検証"""
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        syntax_res = self.check_syntax(file_path) if file_path.endswith((".py", ".sh", ".bash")) else {"valid": True, "error": ""}
+        return {
+            "success": True,
+            "file": file_path,
+            "syntax_valid": syntax_res.get("valid", True),
+            "syntax_error": syntax_res.get("error", "")
+        }
 
     def check_syntax(self, file_path: str) -> Dict[str, Any]:
-        """構文ゲート自動検証"""
+        """構文ゲート自動検証 (Python, Shell, JavaScript, JSON)"""
+        if not os.path.exists(file_path):
+            return {"valid": False, "error": f"File not found: {file_path}"}
+
         if file_path.endswith(".py"):
             res = subprocess.run([sys.executable, "-m", "py_compile", file_path], capture_output=True, text=True)
             return {"valid": res.returncode == 0, "error": res.stderr.strip()}
-        elif file_path.endswith(".sh"):
+        elif file_path.endswith((".sh", ".bash")):
             res = subprocess.run(["bash", "-n", file_path], capture_output=True, text=True)
             return {"valid": res.returncode == 0, "error": res.stderr.strip()}
+        elif file_path.endswith(".json"):
+            try:
+                import json
+                with open(file_path, "r", encoding="utf-8") as f:
+                    json.load(f)
+                return {"valid": True, "error": ""}
+            except Exception as e:
+                return {"valid": False, "error": str(e)}
         return {"valid": True, "error": ""}
 
     def batch_surgical_replace(self, replacements: List[Dict[str, str]]) -> Dict[str, Any]:

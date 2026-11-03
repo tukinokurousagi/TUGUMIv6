@@ -7,7 +7,6 @@ hit-song-producer-pro および music-composer-pro の完全連携と実動を�
 
 import os
 import sys
-import pytest
 
 TUGUMI_ROOT = "/data/data/com.termux/files/home/TUGUMIv6"
 if TUGUMI_ROOT not in sys.path:
@@ -44,7 +43,7 @@ def test_music_theory_engine():
     if composer_scripts not in sys.path:
         sys.path.insert(0, composer_scripts)
 
-    from music_theory import MusicTheory, PROGRESSION_PRESETS
+    from music_theory import MusicTheory
 
     # C Major スケール
     notes = MusicTheory.get_scale_notes("C", "major", octave=4)

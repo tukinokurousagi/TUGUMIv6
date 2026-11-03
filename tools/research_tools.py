@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 TUGUMIv6 Proactive Research & Report Tools
 - Autonomous Web Search & Crawling
@@ -6,11 +5,12 @@ TUGUMIv6 Proactive Research & Report Tools
 - Professional Inverted Pyramid & IMRaD Report Generation
 """
 
-import urllib.request
-import urllib.parse
 import re
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
-from typing import Dict, Any, List
+from typing import Any
+
 try:
     import trafilatura
 except ImportError:
@@ -33,7 +33,7 @@ class ResearchTools:
     def __init__(self, timeout: float = 90.0):
         self.timeout = timeout
 
-    def search_news_rss(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    def search_news_rss(self, query: str, max_results: int = 5) -> list[dict[str, Any]]:
         """Google News RSS を用いたリアルタイム一次ソース・ニュース検索"""
         encoded_query = urllib.parse.quote(query)
         url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
@@ -74,7 +74,7 @@ class ResearchTools:
             results.append({"error": str(e), "query": query})
         return results
 
-    def search_web_lite(self, query: str, max_results: int = 5, auto_crawl: bool = True) -> List[Dict[str, Any]]:
+    def search_web_lite(self, query: str, max_results: int = 5, auto_crawl: bool = True) -> list[dict[str, Any]]:
         """DuckDuckGo + Yahoo Japan + Google News RSS ハイブリッド3重冗長Web検索
         
         Mechanical Inline Deep Crawl:
@@ -147,15 +147,19 @@ class ResearchTools:
             if rss_results and "error" not in rss_results[0]:
                 results = rss_results
 
-        # Mechanical Inline Deep Crawl: 上位2件の生本文を物理的に自動注入
+        # Mechanical Inline Deep Crawl: 上位2件の生本文およびOGP画像を物理的に自動注入
         if auto_crawl and results:
-            for idx, r in enumerate(results[:2]):
+            for _idx, r in enumerate(results[:2]):
                 url = r.get("url")
                 if url and url.startswith("http"):
                     try:
                         raw_body = self.fetch_url_markdown(url)
                         if raw_body and not raw_body.startswith("[Error"):
                             r["extracted_body"] = raw_body[:3000]
+                            # OGP画像抽出
+                            img_match = re.search(r"【代表画像/OGP】:\s*(https?://[^\s\n]+)", raw_body)
+                            if img_match:
+                                r["image_url"] = img_match.group(1).strip()
                         else:
                             r["extracted_body"] = ""
                     except Exception:
@@ -164,7 +168,7 @@ class ResearchTools:
         return results
 
     def fetch_url_markdown(self, url: str) -> str:
-        """一次ソースWebページの高精度本文・メタデータ抽出（trafilaturaエンジン優先）"""
+        """一次ソースWebページの高精度本文・OGP画像・メタデータ抽出（trafilaturaエンジン優先）"""
         try:
             req = urllib.request.Request(
                 url,
@@ -173,6 +177,24 @@ class ResearchTools:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 html = resp.read().decode("utf-8", errors="replace")
 
+            og_image = ""
+            # OGP画像抽出
+            for pat in [
+                r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+                r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']',
+                r'<meta\s+name=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']'
+            ]:
+                m = re.search(pat, html, re.IGNORECASE)
+                if m:
+                    candidate = m.group(1).strip()
+                    if candidate.startswith("//"):
+                        og_image = "https:" + candidate
+                    elif candidate.startswith("http"):
+                        og_image = candidate
+                    elif url:
+                        og_image = urllib.parse.urljoin(url, candidate)
+                    break
+
             # 1. Trafilatura 高精度抽出
             if trafilatura:
                 extracted = trafilatura.extract(html, include_comments=False, include_tables=True, output_format="txt")
@@ -180,7 +202,11 @@ class ResearchTools:
                     meta = trafilatura.extract_metadata(html)
                     meta_str = ""
                     if meta and meta.title:
-                        meta_str = f"【タイトル】: {meta.title}\n"
+                        meta_str += f"【タイトル】: {meta.title}\n"
+                    if not og_image and meta and meta.image:
+                        og_image = meta.image
+                    if og_image:
+                        meta_str += f"【代表画像/OGP】: {og_image}\n"
                     if len(extracted) > 8000:
                         extracted = extracted[:8000] + "\n... [中略（主要部8,000文字抽出）] ..."
                     return meta_str + extracted
@@ -189,11 +215,12 @@ class ResearchTools:
             cleaned = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.DOTALL)
             text = re.sub(r'<[^>]+>', ' ', cleaned)
             text = re.sub(r'\s+', ' ', text).strip()
-            return text[:4000]
+            fallback_meta = f"【代表画像/OGP】: {og_image}\n" if og_image else ""
+            return fallback_meta + text[:4000]
         except Exception as e:
             return f"[Error fetching URL {url}: {e}]"
 
-    def format_professional_report(self, title: str, summary: str, evidence: List[str], details: str) -> str:
+    def format_professional_report(self, title: str, summary: str, evidence: list[str], details: str) -> str:
         """反転ピラミッド形式のプロフェッショナルレポート出力"""
         report = f"# 【調査レポート】{title}\n\n"
         report += f"## 1. エグゼクティブサマリー (結論先行)\n{summary}\n\n"
@@ -203,7 +230,66 @@ class ResearchTools:
         report += f"\n## 3. 詳細分析・技術仕様\n{details}\n"
         return report
 
-    def save_markdown_report(self, title: str, content: str, category: str = "リサーチ") -> Dict[str, Any]:
+    def format_commercial_report(
+        self,
+        title: str,
+        exec_summary: str,
+        evidence_matrix: list[list[str]],
+        conflict_matrix: list[list[str]],
+        details_body: str,
+        mermaid_diagram: str = "",
+        comparison_table: str = "",
+        action_plan: str = "",
+        primary_sources: list[dict[str, str]] | None = None,
+        key_visuals: list[str] | None = None
+    ) -> str:
+        """商用100点満点基準の完全構造化プロフェッショナルレポート生成"""
+        import time
+        now_date = time.strftime("%Y-%m-%d")
+        
+        report = (
+            f"# 【調査レポート】{title}\n\n"
+            f"> **メタデータ**: 作成日: {now_date} | 調査参謀: つぐみ (TUGUMIv6 Intelligence) | 機密度: 社外秘・商用マスター\n\n"
+            f"## 1. エグゼクティブ・サマリー (結論先行)\n"
+            f"{exec_summary}\n\n"
+        )
+
+        if key_visuals:
+            report += "## 2. 視覚的エビデンス・キービジュアル\n"
+            for kv in key_visuals:
+                report += f"- ![{title}]({kv})\n"
+            report += "\n"
+
+        if evidence_matrix and tabulate:
+            report += "## 3. 多角エビデンス検証マトリクス\n\n"
+            report += tabulate.tabulate(evidence_matrix, headers="firstrow", tablefmt="github") + "\n\n"
+
+        if conflict_matrix and tabulate:
+            report += "## 4. ファクト矛盾・論争点検証マトリクス\n\n"
+            report += tabulate.tabulate(conflict_matrix, headers="firstrow", tablefmt="github") + "\n\n"
+
+        if mermaid_diagram:
+            report += f"## 5. コアアーキテクチャ・構造可視化\n\n```mermaid\n{mermaid_diagram.strip()}\n```\n\n"
+
+        report += f"## 6. 詳細分析・技術仕様\n{details_body}\n\n"
+
+        if comparison_table:
+            report += f"## 7. 比較分析・トレードオフ評価\n\n{comparison_table}\n\n"
+
+        if action_plan:
+            report += f"## 8. 将来展望・拓磨様への具体的提言＆ToDo\n\n{action_plan}\n\n"
+
+        if primary_sources:
+            report += "## 9. 参照一次ソース・正規エビデンス一覧\n"
+            for s in primary_sources:
+                name = s.get("title", s.get("url", "一次ソース"))
+                url = s.get("url", "")
+                report += f"- [{name}]({url})\n"
+            report += "\n"
+
+        return report
+
+    def save_markdown_report(self, title: str, content: str, category: str = "リサーチ") -> dict[str, Any]:
         """TUGUMIDesk配下の指定カテゴリ（規約第4章16大分類）に日付入りMarkdownレポートを安全に保存"""
         import os
         import time
@@ -257,30 +343,39 @@ class ResearchTools:
         }
 
     def render_beautiful_html(self, title: str, markdown_content: str, theme: str = "Midnight Galaxy") -> str:
-        """MarkdownレポートをPython markdownエンジン + Tailwind CSSベースの商用品質美麗HTMLに変換"""
+        """MarkdownレポートをPython markdownエンジン + Tailwind CSS + Mermaid.js + Printスタイルの商用最高峰美麗HTMLに変換"""
         themes = {
-            "Midnight Galaxy": {"bg": "#0f172a", "text": "#f8fafc", "card": "#1e293b", "primary": "#3b82f6", "accent": "#8b5cf6"},
-            "Cyberpunk": {"bg": "#0a0a12", "text": "#e0f2fe", "card": "#131325", "primary": "#00f0ff", "accent": "#ff007f"},
-            "Modern Light": {"bg": "#ffffff", "text": "#1e293b", "card": "#f8fafc", "primary": "#2563eb", "accent": "#4f46e5"}
+            "Midnight Galaxy": {"bg": "#0f172a", "text": "#f8fafc", "card": "#1e293b", "primary": "#3b82f6", "accent": "#8b5cf6", "border": "rgba(59, 130, 246, 0.3)"},
+            "Cyberpunk": {"bg": "#0a0a12", "text": "#e0f2fe", "card": "#131325", "primary": "#00f0ff", "accent": "#ff007f", "border": "rgba(0, 240, 255, 0.3)"},
+            "Modern Light": {"bg": "#f8fafc", "text": "#0f172a", "card": "#ffffff", "primary": "#2563eb", "accent": "#4f46e5", "border": "rgba(226, 232, 240, 0.8)"}
         }
         t = themes.get(theme, themes["Midnight Galaxy"])
 
-        # 1. Python markdown エンジンによる本格レンダリング（表、コードブロック、目次完備）
+        # 1. Mermaidコードブロックの一時置換保護
+        mermaid_blocks = []
+        def _save_mermaid(match):
+            idx = len(mermaid_blocks)
+            code = match.group(1).strip()
+            mermaid_blocks.append(code)
+            return f"\n\n<!--MERMAID_PLACEHOLDER_{idx}-->\n\n"
+
+        processed_md = re.sub(r'```mermaid\s*\n(.*?)\n```', _save_mermaid, markdown_content, flags=re.DOTALL)
+
+        # 2. Python markdown エンジンによる本格レンダリング（表、コードブロック、目次完備）
+        body_html = None
         if markdown:
             try:
                 body_html = markdown.markdown(
-                    markdown_content,
+                    processed_md,
                     extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
                 )
             except Exception:
                 body_html = None
-        else:
-            body_html = None
 
         if not body_html:
             # フォールバック簡易変換
             html_lines = []
-            for line in markdown_content.splitlines():
+            for line in processed_md.splitlines():
                 line_str = line.strip()
                 if line_str.startswith("# "):
                     html_lines.append(f"<h1 class='text-2xl font-bold mt-6 mb-4' style='color:{t['primary']}'>{line_str[2:]}</h1>")
@@ -296,13 +391,25 @@ class ResearchTools:
                     html_lines.append("<br/>")
             body_html = "\n".join(html_lines)
 
+        # 3. Mermaidブロックの復元
+        for idx, m_code in enumerate(mermaid_blocks):
+            mermaid_html = (
+                f'<div class="mermaid my-6 p-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex justify-center overflow-x-auto shadow-inner">'
+                f'{m_code}'
+                f'</div>'
+            )
+            body_html = body_html.replace(f"<!--MERMAID_PLACEHOLDER_{idx}-->", mermaid_html)
+            body_html = body_html.replace(f"&lt;!--MERMAID_PLACEHOLDER_{idx}--&gt;", mermaid_html)
+
         html = f"""<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
+    <title>{title} | TUGUMIv6 Intelligence</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({{startOnLoad:true, theme:'dark', securityLevel:'loose'}});</script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         body {{ font-family: 'Inter', 'Noto Sans JP', sans-serif; background-color: {t['bg']}; color: {t['text']}; }}
@@ -311,32 +418,48 @@ class ResearchTools:
         th {{ background-color: rgba(255, 255, 255, 0.08); color: {t['primary']}; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 2px solid rgba(255, 255, 255, 0.15); text-align: left; }}
         td {{ padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }}
         tr:nth-child(even) {{ background-color: rgba(255, 255, 255, 0.02); }}
+        tr:hover {{ background-color: rgba(255, 255, 255, 0.05); }}
         pre {{ background-color: #050811; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 0.75rem; padding: 1rem; overflow-x: auto; margin: 1.25rem 0; }}
         blockquote {{ border-left: 4px solid {t['primary']}; padding-left: 1rem; color: #94a3b8; font-style: italic; margin: 1rem 0; }}
         h1, h2, h3, h4 {{ color: #f8fafc; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.75rem; }}
         h1 {{ font-size: 1.75rem; color: {t['primary']}; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.5rem; }}
-        h2 {{ font-size: 1.35rem; color: {t['accent']}; }}
+        h2 {{ font-size: 1.35rem; color: {t['accent']}; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.25rem; }}
         h3 {{ font-size: 1.15rem; }}
         ul, ol {{ margin-left: 1.5rem; margin-bottom: 1rem; }}
         li {{ margin-bottom: 0.25rem; }}
+        img {{ max-width: 100%; border-radius: 0.75rem; margin: 1.5rem auto; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }}
+        
+        /* 印刷・PDF出力最適化スタイル */
+        @media print {{
+            body {{ background-color: #ffffff !important; color: #111827 !important; }}
+            .report-card {{ border: none !important; box-shadow: none !important; background: transparent !important; padding: 0 !important; }}
+            .no-print {{ display: none !important; }}
+            h1, h2, h3 {{ color: #111827 !important; border-color: #e5e7eb !important; }}
+            table, th, td {{ border: 1px solid #d1d5db !important; color: #111827 !important; }}
+            th {{ background-color: #f3f4f6 !important; }}
+            pre, code {{ background-color: #f9fafb !important; color: #111827 !important; border-color: #e5e7eb !important; }}
+            blockquote {{ border-color: #9ca3af !important; color: #4b5563 !important; }}
+        }}
     </style>
 </head>
 <body class="p-3 sm:p-8 min-h-screen">
-    <div class="max-w-4xl mx-auto rounded-2xl p-5 sm:p-10 shadow-2xl border" style="background-color: {t['card']}; border-color: rgba(255,255,255,0.1)">
+    <div class="report-card max-w-4xl mx-auto rounded-2xl p-5 sm:p-10 shadow-2xl border" style="background-color: {t['card']}; border-color: {t['border']}">
         <header class="mb-8 border-b pb-4" style="border-color: rgba(255,255,255,0.1)">
             <div class="flex items-center justify-between">
-                <span class="text-xs uppercase tracking-widest px-3 py-1 rounded-full font-bold" style="background-color:{t['primary']}; color:#fff">TUGUMIv6 Intelligence</span>
+                <span class="text-xs uppercase tracking-widest px-3 py-1 rounded-full font-bold shadow-sm" style="background-color:{t['primary']}; color:#fff">TUGUMIv6 SOTA Intelligence</span>
                 <span class="text-xs text-slate-400">Master Takuma Autonomous Suite</span>
             </div>
             <h1 class="text-2xl sm:text-3xl font-extrabold mt-4" style="color: {t['text']}">{title}</h1>
+            <p class="text-xs text-pink-400 mt-2 font-semibold">🌸 Dedicated to Master Takuma // 商用完全構造化マスター</p>
         </header>
         <article class="leading-relaxed">
             {body_html}
         </article>
-        <footer class="mt-12 pt-6 border-t text-center text-xs text-slate-500" style="border-color: rgba(255,255,255,0.1)">
-            Generated autonomously by TUGUMI for Master Takuma. All rights reserved.
+        <footer class="mt-12 pt-6 border-t text-center text-xs text-slate-500 no-print" style="border-color: rgba(255,255,255,0.1)">
+            Generated autonomously by TUGUMIv6 Deep Research Engine for Master Takuma. Mobile & Print Optimized.
         </footer>
     </div>
 </body>
 </html>"""
+        return html
         return html

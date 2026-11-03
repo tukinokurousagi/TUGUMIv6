@@ -175,7 +175,7 @@ class AutoHealEngine:
             "timestamp": time.time()
         }
 
-        for root, dirs, files in os.walk(self.workspace_root):
+        for root, _dirs, files in os.walk(self.workspace_root):
             if "__pycache__" in root or ".git" in root or "venv" in root:
                 continue
             for f in files:

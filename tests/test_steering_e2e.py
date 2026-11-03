@@ -25,7 +25,7 @@ class TestSteeringE2E(unittest.TestCase):
             mode="dark"
         )
         first_chunk_received = False
-        for chunk_type, chunk_data in stream1:
+        for _chunk_type, _chunk_data in stream1:
             first_chunk_received = True
             break  # Simulates ESC interrupt
 

@@ -4,14 +4,16 @@ TUGUMIv6 メディア制作・作曲・画像処理統合テスト (test_media_s
 
 import os
 import sys
+from unittest.mock import patch
+
 from PIL import Image
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from tools.media_tools import MusicCompositionEngine, ImageStudioEngine, PureMidiWriter
-from tools.antigravity_tools import get_tugumi_tools
-from interfaces.web.web_server import app
 from fastapi.testclient import TestClient
+from interfaces.web.web_server import app
+from tools.antigravity_tools import get_tugumi_tools
+from tools.media_tools import ImageStudioEngine, MusicCompositionEngine, PureMidiWriter
 
 
 class TestMediaStudio:
@@ -118,25 +120,45 @@ class TestMediaStudio:
         assert data["success"] is True
         assert data["count"] > 0
 
-    def test_09_gemini_music_studio_compose_full_song(self):
-        """GeminiMusicStudio による作詞・Lyriaフルボイス楽曲生成パイプライン検証"""
-        from tools.media_tools import GeminiMusicStudio
-        res = GeminiMusicStudio.compose_full_song(
-            theme="サイバーパンクの夜明け、拓磨様と共に",
-            genre="cyberpunk",
-            bars=1,
-            title="test_unit_vocal_pipeline",
-            use_lyria=True
-        )
-        assert res["success"] is True
-        assert len(res["lyrics"]) > 0
-        assert os.path.exists(res["mp3_path"])
-        if res.get("wav_path"):
-            assert os.path.exists(res["wav_path"])
+    def test_09_gemini_music_studio_compose_full_song(self, tmp_path, monkeypatch):
+        """GeminiMusicStudio による作詞・Lyriaフルボイス楽曲生成パイプライン検証（完全モック・課金ゼロ）"""
+        from tools.media_tools import MUSIC_DIR, GeminiMusicStudio
+        dummy_mp3 = os.path.join(MUSIC_DIR, "test_unit_vocal_pipeline.mp3")
+        dummy_wav = os.path.join(MUSIC_DIR, "test_unit_vocal_pipeline.wav")
+        with open(dummy_mp3, "wb") as f:
+            f.write(b"ID3_MOCK_MP3_DATA")
+        with open(dummy_wav, "wb") as f:
+            f.write(b"RIFF_MOCK_WAV_DATA")
+
+        mock_song_res = {
+            "success": True,
+            "title": "test_unit_vocal_pipeline",
+            "genre": "cyberpunk",
+            "lyrics": "[Verse 1]\nサイバーパンクの夜明け、拓磨様と共に",
+            "midi_path": os.path.join(MUSIC_DIR, "test_unit_vocal_pipeline.mid"),
+            "mp3_path": dummy_mp3,
+            "wav_path": dummy_wav,
+            "duration_sec": 15.0,
+            "use_lyria": True,
+            "model": "lyria-3.5"
+        }
+        with patch.object(GeminiMusicStudio, "compose_full_song", return_value=mock_song_res):
+            res = GeminiMusicStudio.compose_full_song(
+                theme="サイバーパンクの夜明け、拓磨様と共に",
+                genre="cyberpunk",
+                bars=1,
+                title="test_unit_vocal_pipeline",
+                use_lyria=True
+            )
+            assert res["success"] is True
+            assert len(res["lyrics"]) > 0
+            assert os.path.exists(res["mp3_path"])
+            if res.get("wav_path"):
+                assert os.path.exists(res["wav_path"])
 
     def test_10_gemini_image_studio_prompt_fusion(self, tmp_path):
-        """GeminiImageStudio による画像プロンプト融合・一枚合成検証"""
-        from tools.media_tools import GeminiImageStudio
+        """GeminiImageStudio による画像プロンプト融合・一枚合成検証（完全モック・課金ゼロ）"""
+        from tools.media_tools import IMAGES_DIR, GeminiImageStudio
         img1 = Image.new("RGB", (64, 64), color=(255, 0, 100))
         img2 = Image.new("RGB", (64, 64), color=(0, 100, 255))
         p1 = str(tmp_path / "f1.png")
@@ -144,9 +166,19 @@ class TestMediaStudio:
         img1.save(p1)
         img2.save(p2)
 
-        res = GeminiImageStudio.compose([p1, p2], prompt="2つの画像を美しく融合", output_filename="test_fuse.png")
-        assert res["success"] is True
-        assert os.path.exists(res["file_path"])
+        out_path = os.path.join(IMAGES_DIR, "test_fuse.png")
+        Image.new("RGB", (64, 64), color=(128, 50, 180)).save(out_path)
+        mock_fuse_res = {
+            "success": True,
+            "file_path": out_path,
+            "filename": "test_fuse.png",
+            "dimensions": "64x64",
+            "model": "gemini-3.1-flash-image"
+        }
+        with patch.object(GeminiImageStudio, "compose", return_value=mock_fuse_res):
+            res = GeminiImageStudio.compose([p1, p2], prompt="2つの画像を美しく融合", output_filename="test_fuse.png")
+            assert res["success"] is True
+            assert os.path.exists(res["file_path"])
 
     def test_11_web_api_image_endpoints(self, tmp_path):
         """FastAPI TestClient を使った新設画像APIエンドポイント疎通テスト"""

@@ -808,6 +808,30 @@ Style: High quality musical performance, clear vocals, expressive instruments, f
         }
 
 
+def read_lyrics_file(file_path: str) -> str:
+    """ローカルのテキストファイル（.txt, .md等）から歌詞を安全に読み込み（UTF-8, UTF-8-sig, CP932対応）"""
+    p = os.path.expanduser(file_path.strip())
+    if not os.path.isabs(p) and not os.path.exists(p):
+        for base in ["/storage/emulated/0/TUGUMIDesk", "/storage/emulated/0", os.path.expanduser("~/storage/shared"), os.getcwd()]:
+            candidate = os.path.join(base, p)
+            if os.path.isfile(candidate):
+                p = candidate
+                break
+    if not os.path.isfile(p):
+        raise FileNotFoundError(f"歌詞ファイルが見つかりません: {file_path}")
+
+    encodings = ["utf-8-sig", "utf-8", "cp932", "shift_jis", "euc-jp"]
+    for enc in encodings:
+        try:
+            with open(p, "r", encoding=enc) as f:
+                content = f.read()
+            if content and content.strip():
+                return content.strip()
+        except Exception:
+            continue
+    with open(p, "r", encoding="utf-8", errors="replace") as f:
+        return f.read().strip()
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 2.5 オリコン・チャートAI音楽プロデュースエンジン (Hit Song Producer Pro Engine)
@@ -943,6 +967,36 @@ class HitSongProducerEngine:
             "chords": "i - VI - III - VII (Dm -> Bb -> F -> C)",
             "style_prompt": "Dark energetic Cyberpunk Synthwave at 128 BPM in D Minor. Heavy pulsating analog synth bass, arpeggiated neon leads, aggressive electronic drums, cinematic dystopian atmosphere.",
             "vocal_default": "Female Vocals with subtle robotic vocoder doubling, edgy and mysterious."
+        },
+        # 13. 90s TKサウンド / 伝説の小室哲哉風ユーロダンス・ポップ (globe / TRF / 華原朋美 / 安室奈美恵風)
+        "tk_dance_pop": {
+            "name": "🎹 90s TKサウンド / 伝説の小室哲哉風・ユーロダンス・ポップ (globe / TRF / 華原朋美風 / 小室進行)",
+            "genre_en": "90s J-Euro Dance Pop / TK Rave Synthwave",
+            "bpm": 138,
+            "key": "A Minor (Chorus: Key Change to Bb Minor / +1)",
+            "chords": "vi - IV - V - I (小室進行: Am -> F -> G -> C) & vi - IV - V - vi (Am -> F -> G -> Am)",
+            "style_prompt": "An explosive, anthemic 90s Japanese Euro Dance Pop anthem in the legendary TK (Tetsuya Komuro) style at 138 BPM in A Minor. Driving Roland JD-800 acoustic piano octave chord stabs, pulsating 16th-note analog synth bass arpeggio, euphoric detuned supersaw synth brass chords, relentless four-on-the-floor 909 rave drums with energetic open hi-hats and clap snare, dramatic bridge breakdown with filtered piano into an explosive soaring chorus with signature half-step key change (+1).",
+            "vocal_default": "Female High Soprano, piercing clarity, soaring with immense emotional vibrato, passionate high-register chest-voice belting in the chorus reminiscent of 90s Japanese dance-pop divas (KEIKO / Tomomi Kahara style). Dramatic diction and breathless emotional delivery."
+        },
+        # 14. PANDORA風 EDMアンセム (小室哲哉×浅倉大介 / Be The One風 / Beverly超絶ハイトーン)
+        "pandora_be_the_one": {
+            "name": "⚡ PANDORA風 EDMアンセム (小室哲哉×浅倉大介 / Be The One風 / Beverly超絶ハイトーン / 128BPM)",
+            "genre_en": "Epic Stadium EDM Anthem / Progressive Electro Pop / TK x DA Sound",
+            "bpm": 128,
+            "key": "F# Minor (Chorus: A Major / F# Minor)",
+            "chords": "vi - IV - V - I (小室進行: F#m -> D -> E -> A) & IV - V - vi (D -> E -> F#m)",
+            "style_prompt": "A massive, uplifting Stadium EDM Pop Anthem in the iconic style of PANDORA (Tetsuya Komuro & Daisuke Asakura) 'Be The One' at 128 BPM in F# Minor. Sparkling acoustic grand piano arpeggios, pulsing sidechained progressive house bassline, exhilarating electro-synth leads, soaring cinematic string runs, dynamic EDM build-up with dramatic snare rolls and sweeps, exploding into a euphoric, stadium-filling chorus drop with infectious four-on-the-floor beat.",
+            "vocal_default": "World-class Female Power Vocalist (Beverly style), breathtaking 3-octave high-range belting with razor-sharp English/Japanese diction, effortless piercing high notes with rich resonance, soul-stirring emotional intensity and heroic anthem delivery."
+        },
+        # 15. fripSide風 電脳トランス・デジタルJ-Rock (only my railgun / LEVEL5-judgelight-風 / 南條愛乃クリスタルハイトーン)
+        "fripside_railgun": {
+            "name": "⚡ fripSide風 電脳トランス・デジタルJ-Rock (only my railgun / LEVEL5風 / 南條愛乃クリスタルハイトーン / 142BPM)",
+            "genre_en": "Hyper Digital Anime Trance / Cyber Electro J-Rock / fripSide Style",
+            "bpm": 142,
+            "key": "D Minor (Chorus: F Major / D Minor)",
+            "chords": "vi - IV - V - I (小室・哀愁トランス進行: Dm -> Bb -> C -> F) & IV - V - iii - vi (Bb -> C -> Am -> Dm)",
+            "style_prompt": "An explosive, blistering-fast Cyber Digital Anime Trance Rock anthem in the iconic fripSide style ('only my railgun' / 'LEVEL5-judgelight-') at 142 BPM in D Minor. Driving 16th-note Roland JP-8000 supersaw synth arpeggios, sharp aggressive distorted electric rhythm guitars, hard-hitting trance four-on-the-floor kick with driving rolling bassline and crisp open hi-hats, poignant acoustic grand piano octave riffs, dramatic pre-chorus build-up exploding into an adrenaline-fueled, soaring anthemic chorus.",
+            "vocal_default": "Crystalline High-Pitch Japanese Female Anime Vocalist (Yoshino Nanjo / fripSide style), razor-sharp articulation with lightning-fast phrasing, piercing clear high-register soaring into dramatic emotional chorus, radiant anime heroine power with pure clarity."
         }
     }
 
@@ -952,6 +1006,9 @@ class HitSongProducerEngine:
         "female_idol_solo": "Crystalline Japanese Idol Solo Vocalist, charming, emotive, sweet with bright high-frequency presence.",
         "female_soprano": "Female Soprano, clear, agile, passionately belting high notes in chorus with rich natural vibrato and emotional Japanese diction.",
         "female_alto": "Female Alto, warm, smoky, soulful with a touch of vocal fry on note attacks, laid-back groove and intimate microphone presence.",
+        "tk_diva": "Soaring 90s Japanese Dance Diva, powerful piercing high soprano with breathtaking belt, crystal clear resonance, rich emotional vibrato, dynamic transition from breathy intimate verses to explosive anthemic chorus.",
+        "beverly_high_power": "World-class International Female Powerhouse (Beverly style), astonishing 3-octave range, soaring high-register chest-mix belting, flawless English/Japanese articulation, breathtaking power and uplifting stadium heroism.",
+        "fripside_crystalline": "Crystalline High-Register Anime Heroine Vocalist (fripSide / Yoshino Nanjo style), flawless razor-sharp Japanese articulation on fast 16th-note phrases, effortless crystal-clear high notes, radiant emotional resonance and unstoppable digital anime drive.",
         # 男性アイドル・ボーカル系
         "male_idol_group": "Harmonious Japanese Male Idol Group, youthful, charming, clear tenors with soulful falsetto harmonies and catchy group ad-libs.",
         "male_high_tenor": "Male High Tenor, piercing, high-register belting with effortless falsetto, passionate Japanese rock articulation.",
@@ -961,22 +1018,99 @@ class HitSongProducerEngine:
     }
 
     @classmethod
+    def analyze_lyrics(cls, lyrics_text: str) -> Dict[str, Any]:
+        """歌詞テキストから世界観・感情・最適なジャンル・BPM・調性・ボーカル声質をAI推論"""
+        import json
+        import re
+        lyrics_text = (lyrics_text or "").strip()
+        if not lyrics_text:
+            return {"success": False, "error": "歌詞テキストが空です"}
+
+        client = _get_genai_client()
+        prompt = f"""あなたはオリコン・Billboardのトップ音楽プロデューサーです。
+以下の作詞テキスト（歌詞）を深く精読・分析し、この歌詞の世界観・感情・リズムに最も適合する楽曲設計（ジャンル、BPM、調性、ボーカル声質、楽曲タイトル）を分析・提案してください。
+
+【歌詞テキスト】
+{lyrics_text[:3000]}
+
+【選択可能なジャンルプリセットID】:
+- sakamichi_idol (坂道系エモ・アイドル / 乃木坂46・櫻坂46風 / 136BPM)
+- sparkle_idol (王道キラキラ・アイドルポップ / 168BPM)
+- dance_idol (ガールクラッシュ・ダンスアイドル / 125BPM)
+- male_idol (爽やか男性アイドル / ボーイズグループ / 126BPM)
+- male_rock (男性エモRock / ピアノRock / 165BPM)
+- male_ballad (極上男性アコースティックバラード / 74BPM)
+- emotional_rock (疾走エモーショナル J-Rock / アニソン / 168BPM)
+- neo_citypop (煌びやかネオ・シティポップ / 118BPM)
+- future_bass (フューチャー・ベース / 電脳ポップ / 150BPM)
+- orchestral_ballad (涙腺崩壊・王道オーケストラル・バラード / 72BPM)
+- lofi_bedroom (深夜のLo-Fi Chill Bedroom Pop / 82BPM)
+- cyberpunk (近未来サイバーパンク・シンセウェーブ / 128BPM)
+- tk_dance_pop (90s TKサウンド / 伝説の小室哲哉風・ユーロダンス・ポップ / 138BPM / globe・TRF・華原朋美風)
+- pandora_be_the_one (PANDORA風 EDMアンセム / 小室哲哉×浅倉大介 / Be The One風 / Beverly超絶ハイトーン / 128BPM)
+- fripside_railgun (fripSide風 電脳トランス・デジタルJ-Rock / only my railgun・LEVEL5風 / 南條愛乃クリスタルハイトーン / 142BPM)
+
+【選択可能なボーカルプリセットID】:
+- female_idol_unison, female_idol_solo, female_soprano, female_alto, tk_diva, beverly_high_power, fripside_crystalline
+- male_idol_group, male_high_tenor, male_husky_rocker, male_tenor, male_baritone
+
+必ず以下のJSON形式のみを出力してください（Markdownコードブロック```json ... ```）：
+{{
+  "suggested_title": "歌詞にぴったりの楽曲タイトル",
+  "suggested_genre_id": "上記ジャンルプリセットIDから最も合うもの",
+  "suggested_genre_name": "ジャンル表示名",
+  "suggested_vocal_id": "上記ボーカルプリセットIDから最も合うもの",
+  "suggested_bpm": 136,
+  "suggested_key": "E Major 等",
+  "mood_and_theme": "歌詞から読み取れる世界観・感情の解説 (日本語 100字程度)",
+  "arrangement_idea": "伴奏・楽器アレンジの提案 (日本語 100字程度)"
+}}"""
+        try:
+            resp = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(safety_settings=_get_block_none_safety_settings())
+            )
+            raw = (resp.text or "").strip()
+            m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
+            data = json.loads(m.group(1) if m else raw)
+            data["success"] = True
+            return data
+        except Exception:
+            return {
+                "success": True,
+                "suggested_title": "未明のレゾナンス",
+                "suggested_genre_id": "emotional_rock",
+                "suggested_genre_name": "疾走エモーショナル J-Rock / アニソン",
+                "suggested_vocal_id": "female_soprano",
+                "suggested_bpm": 168,
+                "suggested_key": "F# Minor",
+                "mood_and_theme": "切なさと強い決意が交差する感情的な世界観",
+                "arrangement_idea": "疾走感あるギターとストリングスで感情を高める",
+                "fallback": True
+            }
+
+    @classmethod
     def produce_hit_song(
         cls,
         concept_prompt: str,
         genre_preset: Optional[str] = None,
         vocal_type: Optional[str] = None,
         title: Optional[str] = None,
-        synthesize_audio: bool = True
+        synthesize_audio: bool = True,
+        exact_lyrics: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        ユーザーの歌詞イメージや曲調イメージから、オリコン1位水準の楽曲を完全プロデュース。
+        ユーザーの歌詞イメージや既存の歌詞テキストから、オリコン1位水準の楽曲を完全プロデュース。
+        exact_lyrics が指定された場合、提供された歌詞を100%完全保持して楽曲・音響プロファイルを合成する。
         """
         import json
         import re
 
         concept_prompt = (concept_prompt or "").strip()
-        if not concept_prompt:
+        exact_lyrics = (exact_lyrics or "").strip() if exact_lyrics else ""
+
+        if not concept_prompt and not exact_lyrics:
             concept_prompt = "雨の深夜、ネオンの街を駆け抜けながら過去の痛みを乗り越える疾走エモーショナルロック"
 
         client = _get_genai_client()
@@ -984,6 +1118,20 @@ class HitSongProducerEngine:
         # プリセット参照情報の準備
         preset_info = cls.GENRE_PRESETS.get(genre_preset or "", {})
         vocal_info = cls.VOCAL_PRESETS.get(vocal_type or "", preset_info.get("vocal_default", cls.VOCAL_PRESETS["female_soprano"]))
+
+        lyrics_instruction = ""
+        if exact_lyrics:
+            lyrics_instruction = f"""【★最重要・歌詞完全保全ルール（User Exact Lyrics First）】:
+ユーザーから提供された以下の作詞テキスト（歌詞）が既に存在します。
+歌詞の文言・フレーズ・言葉選びをAI側で勝手に改竄・削除・言い換えすることを固く禁じます。
+提供された歌詞をそのまま（[Verse], [Chorus] 等の構成タグがなければ適切にタグ付けしつつ本文は100%保持して）採用し、
+この歌詞の感情・リズム・モーラに極限まで調和する音楽設計（BPM、調性、コード進行、音響Sonic Prompt）をプロデュースしてください。
+
+【提供された確定歌詞】:
+{exact_lyrics}"""
+        else:
+            lyrics_instruction = """【作詞ルール（Hit Song Producer Pro SKILL）】:
+ユーザーの要望イメージに基づき、五感に刺さる情景描写とサビの突き抜けるハイトーン（ア段・オ段の母音配置）を緻密に設計したモーラ調律歌詞を書き下ろしてください。"""
 
         producer_system_prompt = f"""あなたはBillboard JAPANおよびオリコンチャートで数々のミリオンヒットを連発する天才音楽プロデューサー兼トップ作詞家です。
 ユーザーから提供された楽曲・歌詞のイメージを受け取り、商業音楽の最高峰に位置する神曲を設計・プロデュースしてください。
@@ -1004,6 +1152,22 @@ class HitSongProducerEngine:
 5. 【AI音楽モデル向け完全Sonic Prompt（Google DeepMind Lyria公式仕様 lyria-prompt-guide.md）】:
    - 【絶対禁止】: 実在のアーティスト名（LiSA, Aimer, YOASOBI等）や実在のアニメタイトルは著作権・規約違反（PROHIBITED_CONTENT）で即時ブロックされるため絶対に含めないこと。代わりに音響特性・声質（Female Soprano, high-gain guitars, soaring vibrato等）で描写すること。
    - 【公式構造】: 以下のLyria公式フォーマットで構築すること：
+     {{ジャンル・テンポ・楽器・ムード・世界観の英語概要 (1〜2段落)}}
+     Vocal: {{ボーカル声質指定 (Female Soprano, Female Alto, Male Tenor, Male Baritone 等の公式キーワード)}}
+
+     Lyrics:
+     {{[Intro], [Verse 1], [Chorus] 等のタグ付き歌詞}}
+
+{lyrics_instruction}
+
+【ユーザーの要望イメージ】:
+{concept_prompt or (exact_lyrics[:200] + '...') if exact_lyrics else 'おまかせ'}
+
+【参考指定ジャンル】: {preset_info.get('name', genre_preset or '自動判定')}
+【参考指定ボーカル】: {vocal_info}
+【参考指定タイトル】: {title or '自動考案'}
+
+必ず以下のJSONフォーマットのみを出力してください（Markdownコードブロック```json ... ```で囲む）：
      {{ジャンル・テンポ・楽器・ムード・世界観の英語概要 (1〜2段落)}}
      Vocal: {{ボーカル声質指定 (Female Soprano, Female Alto, Male Tenor, Male Baritone 等の公式キーワード)}}
 
@@ -1094,6 +1258,13 @@ class HitSongProducerEngine:
                 "sonic_prompt": f"{preset_info.get('style_prompt', 'Emotional J-Rock track at 168 BPM.')}\nVocals: {vocal_info}\nLyrics:\n{fallback_lyrics}",
                 "producer_notes": "リスナーの胸を打つ冒頭3秒フックと、サビの爆発的ハイトーンを緻密に設計したチャートイン仕様楽曲。"
             }
+
+        # exact_lyrics（提供された歌詞）が存在する場合は100%完全保全
+        if exact_lyrics:
+            song_data["lyrics"] = exact_lyrics
+            # sonic_prompt に確実にユーザーの歌詞を組み込む
+            base_style = preset_info.get("style_prompt", f"Emotional {song_data.get('sub_genre', 'J-Rock')} track at {song_data.get('bpm', 136)} BPM in {song_data.get('key', 'E Major')}.")
+            song_data["sonic_prompt"] = f"{base_style}\nVocals: {vocal_info}\nLyrics:\n{exact_lyrics}"
 
         # タイトル決定
         final_title = title or song_data.get("title") or f"HitSong_{int(time.time())}"
@@ -1241,6 +1412,18 @@ class GeminiImageStudio:
         ),
         "tsugumi_model_s": (
             "18-year-old Japanese idol beauty, delicate slim oval face, clear large almond dark brown eyes, visible aegyo-sal, small straight nose, soft natural glossy pink lips, faint gentle smile, natural black hair with see-through bangs, shoulder-length smooth straight hair with slight inner curl at ends, translucent pale porcelain skin with high clarity, subtle natural coral makeup"
+        ),
+        "清楚系モデル": (
+            "18-year-old Japanese pure-idol beauty, delicate petite oval face, clear large moist dark brown eyes, visible natural aegyo-sal, small straight nose, soft natural rosy glossy lips, faint sweet innocent smile, glossy jet-black straight hair with delicate airy see-through bangs framing her forehead, subtle baby hairs catching natural light, translucent pale porcelain skin with authentic micro-pores and peach fuzz"
+        ),
+        "pure_idol": (
+            "18-year-old Japanese pure-idol beauty, delicate petite oval face, clear large moist dark brown eyes, visible natural aegyo-sal, small straight nose, soft natural rosy glossy lips, faint sweet innocent smile, glossy jet-black straight hair with delicate airy see-through bangs framing her forehead, subtle baby hairs catching natural light, translucent pale porcelain skin with authentic micro-pores and peach fuzz"
+        ),
+        "正源司モデル": (
+            "top Japanese idol beauty with radiant youthful charm reminiscent of Hinatazaka46 center Yoko Shogenji, delicate petite face with softly rounded chin, remarkably large and round sparkling dark brown doe-eyes filled with clear moist catchlights, prominent charming aegyo-sal, small straight button nose, sweet cherry-pink lips with naturally upturned corners forming an innocent, bright idol smile showing a hint of tiny neat white front teeth, airy finely textured see-through fringe bangs resting softly over her forehead, glossy jet-black straight hair falling gently over delicate shoulders, luminous pale porcelain skin with natural peach bloom"
+        ),
+        "shogenji_idol": (
+            "top Japanese idol beauty with radiant youthful charm reminiscent of Hinatazaka46 center Yoko Shogenji, delicate petite face with softly rounded chin, remarkably large and round sparkling dark brown doe-eyes filled with clear moist catchlights, prominent charming aegyo-sal, small straight button nose, sweet cherry-pink lips with naturally upturned corners forming an innocent, bright idol smile showing a hint of tiny neat white front teeth, airy finely textured see-through fringe bangs resting softly over her forehead, glossy jet-black straight hair falling gently over delicate shoulders, luminous pale porcelain skin with natural peach bloom"
         ),
     }
 
@@ -1677,6 +1860,139 @@ Combine the characters, elements, lighting, and aesthetic styles into a single u
         return {"success": False, "error": "Gemini 画像合成モデルの呼び出しに失敗しました。"}
 
     @classmethod
+    def face_lock_dressup(
+        cls,
+        image_paths: Union[str, List[str]],
+        outfit: str = "",
+        background: str = "",
+        mood_or_pose: str = "",
+        output_filename: str = "",
+        auto_crop_black_bars: bool = True
+    ) -> Dict[str, Any]:
+        """
+        AI美女モデルの顔立ち（Character DNA / 骨格・目元・前髪・生体質感）を完全固定し、
+        衣装および背景、シチュエーションを自在に着せ替え・置換生成する。
+        """
+        if isinstance(image_paths, str):
+            image_paths = [image_paths]
+        valid_paths = [p for p in image_paths if os.path.isfile(p)]
+        if not valid_paths:
+            return {"success": False, "error": "有効なリファレンス画像が指定されていません。"}
+
+        import tempfile
+        client = _get_genai_client()
+
+        # 上下の黒帯自動トリミング処理
+        processed_paths = []
+        for p in valid_paths:
+            cropped_done = False
+            if auto_crop_black_bars and Image and np is not None:
+                try:
+                    with Image.open(p) as img:
+                        arr = np.array(img.convert("RGB"))
+                        row_means = arr.mean(axis=(1, 2))
+                        valid_rows = np.where(row_means > 10)[0]
+                        if len(valid_rows) > 0 and (valid_rows[0] > 0 or valid_rows[-1] < arr.shape[0] - 1):
+                            top, bottom = valid_rows[0], valid_rows[-1]
+                            cropped = img.crop((0, top, img.width, bottom + 1))
+                            tmp_f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                            cropped.save(tmp_f.name, "PNG")
+                            processed_paths.append(tmp_f.name)
+                            cropped_done = True
+                except Exception:
+                    pass
+            if not cropped_done:
+                processed_paths.append(p)
+
+        # Gemini Part 構築
+        parts = []
+        for p in processed_paths:
+            with open(p, "rb") as f:
+                b = f.read()
+            ext = os.path.splitext(p)[1].lower()
+            mime = "image/png" if ext == ".png" else "image/jpeg"
+            parts.append(types.Part.from_bytes(data=b, mime_type=mime))
+
+        # 衣装・背景・ポーズの指定とプロンプト昇華
+        outfit_desc = outfit.strip() if outfit else "stylish elegant casual clothing"
+        bg_desc = background.strip() if background else "beautiful natural aesthetic setting"
+        pose_desc = mood_or_pose.strip() if mood_or_pose else "looking softly into the camera with an affectionate sweet gaze"
+
+        prompt_instruction = f"""
+You are provided with {len(parts)} reference image(s) of a Japanese idol beauty model.
+CRITICAL MANDATE:
+1. FACIAL IDENTITY LOCK (Character DNA):
+Strictly maintain and lock the exact same facial bone structure, facial contours, almond dark eyes, eyelid creases, distinct soft aegyo-sal (puffy teardrop bags), nose shape, naturally pillowy lips, straight jet-black hair with delicate airy see-through fringe bangs, and translucent porcelain skin identical to the girl in the reference images. Her face must NOT change or become someone else.
+
+2. OUTFIT TRANSFORMATION:
+Completely transform and dress her in the following outfit:
+{outfit_desc}
+Ensure rich, photorealistic fabric textures, organic fold creases, and natural fit around her body.
+
+3. SETTING & BACKGROUND TRANSFORMATION:
+Place her in the following setting and background:
+{bg_desc}
+Include cinematic lighting, atmospheric depth, and beautiful organic lens bokeh.
+
+4. POSE, MOOD & OPTICAL REALISM:
+{pose_desc}
+Shot on Sony Alpha 7R V with 85mm f/1.4 GM lens at f/1.8, 1/320s, ISO 100.
+Authentic unretouched micro-skin texture, subtle pores, natural hydration, zero 3D CGI or plastic airbrushing. Raw authentic Japanese photobook masterpiece.
+"""
+        contents = parts + [prompt_instruction.strip()]
+
+        if not output_filename:
+            output_filename = f"Takuma_Dressup_{int(time.time())}.png"
+        elif not output_filename.endswith((".png", ".jpg", ".jpeg")):
+            output_filename += ".png"
+        out_path = os.path.join(IMAGES_DIR, output_filename)
+
+        models_to_try = ["gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-image-preview"]
+        last_error = ""
+
+        for m in models_to_try:
+            try:
+                resp = client.models.generate_content(
+                    model=m,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE"],
+                        safety_settings=_get_block_none_safety_settings()
+                    )
+                )
+                for part in resp.candidates[0].content.parts:
+                    if part.inline_data and part.inline_data.data:
+                        raw = part.inline_data.data
+                        if isinstance(raw, str):
+                            import base64
+                            raw = base64.b64decode(raw)
+                        with open(out_path, "wb") as f:
+                            f.write(raw)
+                        _scan_media_file(out_path)
+                        dim_str = "1024x1024"
+                        if Image:
+                            try:
+                                with Image.open(out_path) as im:
+                                    dim_str = f"{im.width}x{im.height}"
+                            except Exception:
+                                pass
+                        return {
+                            "success": True,
+                            "file_path": out_path,
+                            "filename": output_filename,
+                            "model": m,
+                            "outfit": outfit,
+                            "background": background,
+                            "dimensions": dim_str,
+                            "message": f"👗 顔立ち固定・着せ替え画像を生成しました: {out_path}"
+                        }
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        return {"success": False, "error": f"着せ替え生成エラー: {last_error}"}
+
+    @classmethod
     def to_ascii(cls, image_path: str, target_width: int = 44) -> str:
         """画像を高解像度なANSI TrueColor (Unicode ハーフブロック '▀') アスキーアートに変換"""
         if Image is None or not os.path.isfile(image_path):
@@ -1718,6 +2034,7 @@ def main():
         print("  gen <prompt> [style]          一般画像生成 (cyberpunk, anime, etc.)")
         print("  edit <img_path> <prompt>      既存画像のプロンプト編集・変形")
         print("  compose <img1> <img2> <prompt> 複数画像の1枚融合・合成")
+        print("  dressup <img_path> [options]  AI美女の顔立ち固定・衣装＆背景着せ替え")
         print("  ascii <img_path>              画像のターミナルTrueColorプレビュー表示")
         return
 
@@ -1781,6 +2098,36 @@ def main():
         prompt = " ".join(sys.argv[4:])
         print(f"🎭 Composing images: {p1} + {p2} with prompt: {prompt}")
         res = GeminiImageStudio.compose(image_paths=[p1, p2], prompt=prompt)
+        if res.get("success"):
+            print(f"✅ Success! Saved to: {res['file_path']}")
+            print(GeminiImageStudio.to_ascii(res['file_path'], target_width=44))
+        else:
+            print(f"❌ Error: {res.get('error')}")
+
+    elif cmd in ("dressup", "face-lock", "wear"):
+        import argparse
+        parser = argparse.ArgumentParser(description="顔立ち完全固定・AI美女モデル着せ替え＆背景置換")
+        parser.add_argument("images", nargs="+", help="リファレンス画像パス（1枚以上）")
+        parser.add_argument("-o", "--outfit", default="", help="変更する衣装（例: 夏用セーラー制服, 浴衣, ニット）")
+        parser.add_argument("-b", "--bg", "--background", default="", help="変更する背景・ロケーション（例: 放課後の教室, 夏祭り）")
+        parser.add_argument("-m", "--mood", "--pose", default="", help="表情やポーズ（例: 微笑み, 頬杖）")
+        parser.add_argument("-f", "--filename", default="", help="出力ファイル名")
+        sub_args = parser.parse_args(sys.argv[2:])
+
+        print("👗 AI美女モデル顔立ち固定・着せ替え実行中...")
+        print(f"  リファレンス画像: {sub_args.images}")
+        print(f"  衣装: {sub_args.outfit or 'エレガントカジュアル'}")
+        print(f"  背景: {sub_args.bg or 'ナチュラルロケーション'}")
+        if sub_args.mood:
+            print(f"  ポーズ/表情: {sub_args.mood}")
+
+        res = GeminiImageStudio.face_lock_dressup(
+            image_paths=sub_args.images,
+            outfit=sub_args.outfit,
+            background=sub_args.bg,
+            mood_or_pose=sub_args.mood,
+            output_filename=sub_args.filename
+        )
         if res.get("success"):
             print(f"✅ Success! Saved to: {res['file_path']}")
             print(GeminiImageStudio.to_ascii(res['file_path'], target_width=44))

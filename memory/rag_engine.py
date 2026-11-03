@@ -489,7 +489,7 @@ class HybridRAGEngine:
                     raw_chunks = self.chunk_text(content, chunk_size=1800, overlap=150)[:40]
 
                 contextualized_chunks: List[str] = []
-                for idx, ch in enumerate(raw_chunks):
+                for _idx, ch in enumerate(raw_chunks):
                     header = f"[RAG Source: {meta['rel_path']} | Folder: {meta['folder']} | File: {meta['title']}]"
                     contextualized_chunks.append(f"{header}\n{ch}")
 
@@ -504,7 +504,7 @@ class HybridRAGEngine:
 
         # 新規・更新チャンクのバッチEmbedding生成
         new_items: List[Dict[str, Any]] = []
-        for fp, base_dir, meta, ctx_chunks in files_to_process:
+        for fp, _base_dir, meta, ctx_chunks in files_to_process:
             # 既存の同一テキストチャンクにEmbeddingがあれば再利用してAPIコールを節約
             old_emb_map = {
                 it.get("text", ""): it.get("embedding", [])
@@ -663,24 +663,53 @@ class HybridRAGEngine:
             print(f"[RAGEngine] add_knowledge failed: {e}")
             return False
 
+    @staticmethod
+    def _strip_chunk_header(text: str) -> str:
+        """チャンク先頭の [RAG Source: ...] ヘッダーを除去して純粋な本文を返す"""
+        if not text:
+            return ""
+        s = text.strip()
+        if s.startswith("[RAG Source:") and "]\n" in s[:240]:
+            return s.split("]\n", 1)[1].strip()
+        return s
+
+    @staticmethod
+    def _classify_folder_role(folder: str, rel_path: str = "") -> Tuple[str, str]:
+        """フォルダ・パスからナレッジの役割（成功例お手本 / 失敗例反面教師 / 自己進化 / 確定知識）を分類"""
+        combined = f"{folder} {rel_path}".lower()
+        if "成功例" in combined or "success" in combined:
+            return "reference_success", "✨ 成功例リファレンス（お手本・模範基準）"
+        if "失敗例" in combined or "failure" in combined or "fail" in combined:
+            return "reference_failure", "⚠️ 失敗例アンチパターン（反面教師・模倣厳禁）"
+        if "self_evolution" in combined:
+            return "self_evolution", "🧬 SOTA自己進化・技術仕様ナレッジ"
+        return "knowledge", "📘 確定ドメインナレッジ・一次資料"
+
     def _extract_query_terms(self, query: str) -> List[str]:
-        """日本語・英語混在クエリから検索キーワードと2文字N-gramトークンを抽出する"""
+        """日本語・英語混在クエリから検索キーワードと複合トークンを制限なく抽出する"""
         if not query:
             return []
-        # 句読点や助詞で簡易分割
-        cleaned = re.sub(r"[、。！？!\?（）\(\)\[\]「」『』・：:／/\\,\.\-\s]+", " ", query)
+        cleaned = re.sub(r"[、。！？!\?（）\(\)\[\]「」『』【】・：:／/\\,\.\-\n\r\t]+", " ", query)
         raw_parts = [p.strip() for p in cleaned.split() if p.strip()]
         terms: List[str] = []
+
+        split_pat = re.compile(
+            r"(?:について教えて|について解説して|について調べて|についてまとめて|について|"
+            r"とは何ですか|とは何か|とは|って何|ですか|ますか|でしょうか|"
+            r"を教えて|を見せて|を作って|を作成して|を書いて|を調べて|を検索して|を確認して|"
+            r"教えて|ください|下さい|お願いします|お願い|"
+            r"[のをにはがでとへやもからまでより])"
+        )
+
         for part in raw_parts:
-            terms.append(part)
-            # 助詞分割
-            sub_parts = re.split(r"(?:について|とは|ですか|教えて|ください|[のをにはがでとへやも])", part)
+            if part not in terms:
+                terms.append(part)
+            sub_parts = split_pat.split(part)
             for sp in sub_parts:
                 sp = sp.strip()
-                if len(sp) >= 2 and sp not in terms:
+                if sp and sp not in terms:
                     terms.append(sp)
-            # 漢字・カタカナ・英数字の連続塊を抽出
-            chunks = re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}|[\u30a0-\u30ff]{2,}|[\u3040-\u309f]{3,}", part)
+            chunks = re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}|[\u30a0-\u30ff]{2,}|[\u3040-\u309f]{2,}", part)
             for ch in chunks:
                 if ch not in terms:
                     terms.append(ch)
@@ -693,45 +722,53 @@ class HybridRAGEngine:
         folder_filter: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Dense Vector (gemini-embedding-2) + Sparse FTS5 + 日本語部分一致/メタデータブーストの
+        Dense Vector (gemini-embedding-2 3072次元) + Sparse FTS5 + 日本語部分一致/メタデータブーストの
         3層ハイブリッド検索 (Reciprocal Rank Fusion)
+        ※ いかなるキーワード制限・文字数切り詰め・ヒット足切りも行わず、フルスペックで検索結果を返す。
         """
         if not query or not query.strip():
             return []
 
-        # もしキャッシュが空なら自動初期インジェスト（埋め込みなし高速モード→後続利用可能）
         if not self.vector_store:
             self.ingest_all(embed_missing=False)
 
-        candidates = self.vector_store
+        candidates: List[Tuple[int, Dict[str, Any]]] = list(enumerate(self.vector_store))
         if folder_filter:
             ff_lower = folder_filter.strip().lower()
             candidates = [
-                it for it in candidates
+                (idx, it) for idx, it in candidates
                 if ff_lower in str(it.get("folder", "")).lower()
                 or ff_lower in str(it.get("rel_path", "")).lower()
             ]
 
+        if not candidates:
+            return []
+
+        terms = self._extract_query_terms(query)
+
         # 1. Dense Vector Search (3072-dim Cosine Similarity)
         dense_results: List[Dict[str, Any]] = []
-        has_embeddings = any(it.get("embedding") for it in candidates)
+        has_embeddings = any(it.get("embedding") for _, it in candidates)
         if has_embeddings:
             client = self._ensure_client()
             if client and hasattr(client, "embed_text"):
                 try:
                     query_vec = client.embed_text(query)
                     if query_vec:
-                        for item in candidates:
+                        for idx, item in candidates:
                             emb = item.get("embedding")
                             if emb:
                                 sim = cosine_similarity(query_vec, emb)
+                                chunk_id = item.get("source_chunk_id") or f"{item.get('file_path', '')}#{idx}"
                                 dense_results.append({
+                                    "chunk_id": chunk_id,
                                     "title": item.get("title", ""),
                                     "rel_path": item.get("rel_path", item.get("title", "")),
                                     "folder": item.get("folder", "root"),
                                     "text": item.get("text", ""),
                                     "source": item.get("file_path", ""),
-                                    "score": sim
+                                    "score": sim,
+                                    "dense_sim": sim,
                                 })
                         dense_results.sort(key=lambda x: x["score"], reverse=True)
                 except Exception:
@@ -739,104 +776,195 @@ class HybridRAGEngine:
 
         # 2. Sparse FTS5 Search
         sparse_results: List[Dict[str, Any]] = []
-        terms = self._extract_query_terms(query)
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cur = conn.cursor()
-                safe_q = " ".join([t for t in terms if t.isalnum()])
+                fts_terms = [t for t in terms if t.isalnum()]
+                safe_q = " OR ".join(fts_terms)
                 if safe_q.strip():
                     cur.execute("""
-                        SELECT title, content as text, category, source_path as source, rank as score
+                        SELECT rowid, title, content as text, category, source_path as source, rank as score
                         FROM knowledge_fts
                         WHERE knowledge_fts MATCH ?
-                        ORDER BY rank LIMIT 20
+                        ORDER BY rank LIMIT 30
                     """, (safe_q.strip(),))
                     for r in cur.fetchall():
                         d = dict(r)
-                        if folder_filter and folder_filter.lower() not in (d.get("title", "") + d.get("category", "")).lower():
+                        cat_str = str(d.get("category", "")).replace("rag:", "")
+                        title_str = str(d.get("title", ""))
+                        if folder_filter and folder_filter.lower() not in (title_str + cat_str).lower():
                             continue
+                        txt_val = d.get("text", "")
+                        src_val = d.get("source", "")
                         sparse_results.append({
-                            "title": os.path.basename(d.get("source", "")) or d.get("title", ""),
-                            "rel_path": d.get("title", ""),
-                            "folder": str(d.get("category", "")).replace("rag:", ""),
-                            "text": d.get("text", ""),
-                            "source": d.get("source", ""),
-                            "score": abs(float(d.get("score", 0.0)))
+                            "chunk_id": f"{src_val}:fts:{hash(txt_val)}",
+                            "title": os.path.basename(src_val) or title_str,
+                            "rel_path": title_str,
+                            "folder": cat_str or "root",
+                            "text": txt_val,
+                            "source": src_val,
+                            "score": abs(float(d.get("score", 0.0))),
                         })
         except Exception:
             pass
 
-        # 3. 日本語キーワード・ファイル名・フォルダ名ダイレクトマッチャー（FTS5の日本語トークナイズ漏れを100%補完）
+        # 3. 日本語キーワード・ファイル名・フォルダ名ダイレクトマッチャー
         lexical_results: List[Dict[str, Any]] = []
         q_lower = query.strip().lower()
-        for item in candidates:
+        q_core_phrase = re.sub(
+            r"(?:について教えて|について解説して|について|とは何ですか|とは|を教えて|を見せて|を作って|を作成して|を書いて|教えて|ください|下さい).*$",
+            "",
+            q_lower
+        ).strip()
+
+        for idx, item in candidates:
             title_l = str(item.get("title", "")).lower()
             rel_l = str(item.get("rel_path", "")).lower()
             folder_l = str(item.get("folder", "")).lower()
-            text_l = str(item.get("text", "")).lower()
+            full_text = str(item.get("text", ""))
+            clean_body_l = self._strip_chunk_header(full_text).lower()
+            chunk_id = item.get("source_chunk_id") or f"{item.get('file_path', '')}#{idx}"
 
             lex_score = 0.0
-            if q_lower in title_l or q_lower in rel_l:
-                lex_score += 5.0
-            if q_lower in text_l:
-                lex_score += 2.5
+            if q_lower and (q_lower in title_l or q_lower in rel_l):
+                lex_score += 8.0
+            elif q_core_phrase and (q_core_phrase in title_l or q_core_phrase in rel_l):
+                lex_score += 6.0
+
+            if q_core_phrase and q_core_phrase in clean_body_l:
+                lex_score += 3.5
 
             for term in terms:
                 tl = term.lower()
-                if len(tl) < 2:
+                if not tl:
                     continue
-                if tl in title_l:
+                if tl in title_l or tl in rel_l:
                     lex_score += 3.0
                 if tl in folder_l:
                     lex_score += 2.0
-                if tl in text_l:
-                    # 出現回数に応じた対数ボーナス
-                    cnt = text_l.count(tl)
+                if tl in clean_body_l:
+                    cnt = clean_body_l.count(tl)
                     lex_score += 1.0 + min(1.5, math.log1p(cnt) * 0.4)
 
             if lex_score > 0.0:
                 lexical_results.append({
+                    "chunk_id": chunk_id,
                     "title": item.get("title", ""),
                     "rel_path": item.get("rel_path", item.get("title", "")),
                     "folder": item.get("folder", "root"),
-                    "text": item.get("text", ""),
+                    "text": full_text,
                     "source": item.get("file_path", ""),
-                    "score": lex_score
+                    "score": lex_score,
+                    "lex_score": lex_score,
                 })
         lexical_results.sort(key=lambda x: x["score"], reverse=True)
 
-        # 4. Reciprocal Rank Fusion (RRF: k=60) + Lexical Boost
+        # 4. Reciprocal Rank Fusion (RRF: チャンク固有キーで集計し、ヘッダー衝突バグを排除)
         rrf_scores: Dict[str, float] = {}
         content_map: Dict[str, Dict[str, Any]] = {}
 
-        for rank, item in enumerate(dense_results[:25]):
-            key = f"{item['source']}:{item['text'][:80]}"
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + (1.2 / (60 + rank))
-            content_map[key] = item
+        def _make_unique_key(entry: Dict[str, Any]) -> str:
+            clean_b = self._strip_chunk_header(entry.get("text", ""))
+            return f"{entry.get('source', '')}::{clean_b[:120]}::{len(clean_b)}"
 
-        for rank, item in enumerate(sparse_results[:25]):
-            key = f"{item['source']}:{item['text'][:80]}"
+        for rank, item in enumerate(dense_results[:30]):
+            key = _make_unique_key(item)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + (1.2 / (60 + rank))
+            if key not in content_map:
+                content_map[key] = dict(item)
+            else:
+                content_map[key]["dense_sim"] = item.get("dense_sim", item.get("score", 0.0))
+
+        for rank, item in enumerate(sparse_results[:30]):
+            key = _make_unique_key(item)
             rrf_scores[key] = rrf_scores.get(key, 0.0) + (1.0 / (60 + rank))
             if key not in content_map:
-                content_map[key] = item
+                content_map[key] = dict(item)
 
-        for rank, item in enumerate(lexical_results[:25]):
-            key = f"{item['source']}:{item['text'][:80]}"
-            # ファイル名・語彙一致には確実なRRF重みを付与
-            boost = 1.35 if item["score"] >= 3.0 else 1.0
+        for rank, item in enumerate(lexical_results[:35]):
+            key = _make_unique_key(item)
+            l_sc = item.get("score", 0.0)
+            boost = 1.8 if l_sc >= 6.0 else (1.35 if l_sc >= 3.0 else 1.0)
             rrf_scores[key] = rrf_scores.get(key, 0.0) + (boost / (50 + rank))
             if key not in content_map:
-                content_map[key] = item
+                content_map[key] = dict(item)
+            else:
+                content_map[key]["score"] = max(content_map[key].get("score", 0.0), l_sc)
+                content_map[key]["lex_score"] = l_sc
 
         ranked_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
         final_results: List[Dict[str, Any]] = []
         for k in ranked_keys[:top_k]:
             entry = dict(content_map[k])
+            raw_txt = entry.get("text", "")
+            clean_txt = self._strip_chunk_header(raw_txt)
+            folder_val = entry.get("folder", "root")
+            rel_val = entry.get("rel_path", entry.get("title", ""))
+            role_code, role_label = self._classify_folder_role(folder_val, rel_val)
+            lex_sc = float(entry.get("lex_score", entry.get("score", 0.0)))
+            dense_sc = float(entry.get("dense_sim", 0.0))
+
+            entry["clean_text"] = clean_txt
+            entry["content"] = raw_txt  # 原文100%無加工で保持
+            entry["category"] = folder_val
+            entry["role"] = role_code
+            entry["role_label"] = role_label
             entry["rrf_score"] = round(rrf_scores[k], 5)
+            entry["score"] = round(lex_sc if lex_sc > 0 else dense_sc, 4)
             final_results.append(entry)
 
         return final_results
+
+    def search(self, query: str, top_k: int = 3, **kwargs: Any) -> List[Dict[str, Any]]:
+        """後方互換・Live API 等からの直接検索エイリアス"""
+        return self.search_hybrid(query=query, top_k=top_k, **kwargs)
+
+    def retrieve_for_context(
+        self,
+        query: str,
+        top_k: int = 3,
+        is_task: bool = False
+    ) -> Dict[str, Any]:
+        """
+        チャット対話および自律タスク向けに、いかなるスキップ制限・足切り・文字数切り詰めも行わず、
+        3072次元ハイブリッド検索結果を全文そのまま抽出して返す。
+        """
+        if not query or not query.strip():
+            return {"has_hits": False, "hits": [], "context_text": "", "summary_label": ""}
+
+        selected_hits = self.search_hybrid(query, top_k=top_k)
+        if is_task and selected_hits and not any(h.get("role") == "reference_success" for h in selected_hits):
+            succ_candidates = self.search_hybrid(query, top_k=1, folder_filter="成功例")
+            if succ_candidates:
+                selected_hits.append(succ_candidates[0])
+
+        if not selected_hits:
+            return {"has_hits": False, "hits": [], "context_text": "", "summary_label": ""}
+
+        blocks: List[str] = []
+        titles_summary: List[str] = []
+
+        for idx, h in enumerate(selected_hits, 1):
+            title = h.get("title", "Unknown")
+            folder = h.get("folder", "root")
+            role_label = h.get("role_label", "📘 ナレッジ")
+            raw_txt = h.get("text", "")
+            score = h.get("score", 0.0)
+            titles_summary.append(f"[{folder}] {title}")
+            blocks.append(f"### [{idx}] {role_label}: `{title}` (Folder: `{folder}` | Score: {score})\n{raw_txt}")
+
+        context_text = (
+            "【自律参照ナレッジベース (Auto-RAG Knowledge)】\n"
+            + "\n\n".join(blocks)
+        )
+        summary_label = f"関連RAG {len(selected_hits)}件を参照 ({', '.join(titles_summary)})"
+        return {
+            "has_hits": True,
+            "hits": selected_hits,
+            "context_text": context_text,
+            "summary_label": summary_label,
+        }
 
     def query(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """MCP / 外部互換用クエリエントリポイント"""
@@ -874,6 +1002,7 @@ class HybridRAGEngine:
                 embedded_chunks += 1
 
             if fp not in indexed_files_map:
+                role_code, role_label = self._classify_folder_role(folder, rel)
                 indexed_files_map[fp] = {
                     "file_path": fp,
                     "rel_path": rel,
@@ -882,12 +1011,17 @@ class HybridRAGEngine:
                     "file_ext": ext,
                     "file_size": item.get("file_size", 0),
                     "chunks": 0,
+                    "role": role_code,
+                    "role_label": role_label,
+                    "has_3072d": bool(item.get("embedding")),
                 }
                 ext_stats[ext] = ext_stats.get(ext, 0) + 1
                 f_entry = folder_stats.setdefault(folder, {"files": 0, "chunks": 0})
                 f_entry["files"] += 1
 
             indexed_files_map[fp]["chunks"] += 1
+            if item.get("embedding"):
+                indexed_files_map[fp]["has_3072d"] = True
             folder_stats.setdefault(folder, {"files": 0, "chunks": 0})["chunks"] += 1
 
         fts_count = 0
@@ -902,16 +1036,22 @@ class HybridRAGEngine:
             1 for fp in indexed_files_map
             if any(fp.startswith(rd) for rd in self.rag_dirs)
         )
+        folders_simple = {k: v["chunks"] for k, v in folder_stats.items()}
 
         return {
             "rag_dirs": self.rag_dirs,
             "disk_total_files": total_disk_files,
             "tugumi_rag_indexed_files": tugumi_rag_indexed,
             "total_indexed_files": len(indexed_files_map),
+            "total_files": len(indexed_files_map),
             "total_chunks": len(self.vector_store),
             "embedded_chunks": embedded_chunks,
+            "vector_chunks": embedded_chunks,
+            "embedding_dim": 3072,
             "fts5_rows": fts_count,
+            "fts_chunks": fts_count,
             "folder_stats": folder_stats,
+            "folders": folders_simple,
             "ext_stats": ext_stats,
             "files": sorted(indexed_files_map.values(), key=lambda x: x["rel_path"]),
         }

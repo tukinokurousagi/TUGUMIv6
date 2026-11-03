@@ -6,7 +6,6 @@ TUGUMIv6 Upgraded Research Tools Unit & E2E Test Suite
 - Markdown Engine Table & Code Rendering
 """
 
-import pytest
 from tools.research_tools import ResearchTools
 
 def test_research_tools_initialization():

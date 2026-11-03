@@ -13,7 +13,6 @@ Tests all 6 audited improvements:
 import os
 import sys
 import json
-import time
 import unittest
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -22,22 +21,12 @@ if project_root not in sys.path:
 
 from tools.antigravity_tools import (
     get_tugumi_tools,
-    coding_grep_search,
-    coding_read_lines,
-    coding_surgical_replace,
-    coding_check_syntax,
-    termux_run_command,
-    termux_privileged_command,
-    android_ui_action,
-    file_list_tree,
-    file_write_safe,
-    check_loop_status,
 )
 from tools.file_tools import FileTools
 from tools.coding_tools import CodingTools
 from tools.termux_tools import TermuxTools
 from core.subagents import get_tugumi_subagents
-from core.loop_guard import LoopGuard, default_loop_guard
+from core.loop_guard import LoopGuard
 from core.supervisor import Supervisor
 from persona.context_compressor import ContextCompressor
 from passive_income.defi_arbitrage_monitor import DeFiArbitrageMonitor

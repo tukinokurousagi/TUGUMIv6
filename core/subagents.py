@@ -18,21 +18,26 @@ def get_tugumi_subagents() -> List[types.SubagentConfig]:
         coding_grep_search,
         coding_read_lines,
         coding_surgical_replace,
+        coding_write_file,
         coding_batch_surgical_replace,
         coding_check_syntax,
         execute_code,
+        rag_search_knowledge,
+        rag_list_files,
+        rag_add_knowledge,
     )
     
     # 1. 専門リサーチサブエージェント
     research_agent = types.SubagentConfig(
         name="researcher",
-        description="Deep research agent for web crawling, documentation retrieval, and fact-checking.",
+        description="Deep research agent for local RAG knowledge retrieval (TUGUMI_RAG), web crawling, documentation retrieval, and fact-checking.",
         system_instructions=(
             "You are the specialized Researcher subagent for TUGUMI v6.\n"
-            "Use web_search_duckduckgo and fetch_url_text to obtain factual, objective primary sources.\n"
-            "Never hallucinate. Cite specific URLs and evidence."
+            "1. Check local knowledge in TUGUMI_RAG using rag_search_knowledge and rag_list_files.\n"
+            "2. Use web_search_duckduckgo and fetch_url_text to obtain factual, objective primary web sources.\n"
+            "3. Never hallucinate. Cite specific local RAG files and web URLs with concrete evidence."
         ),
-        tools=[web_search_duckduckgo, fetch_url_text],
+        tools=[rag_search_knowledge, rag_list_files, rag_add_knowledge, web_search_duckduckgo, fetch_url_text],
         capabilities=types.SubagentCapabilities(
             enabled_tools=[types.BuiltinTools.VIEW_FILE, types.BuiltinTools.READ_URL_CONTENT]
         )
@@ -65,7 +70,7 @@ def get_tugumi_subagents() -> List[types.SubagentConfig]:
             "4. Surgical Minimal Diffs: Modify minimal lines (3-5 lines context). Zero placeholders (no TODO/pass). Production-ready code only.\n"
             "5. 5-Layer Verification Gate: Verify once before analysis and once after patching to secure objective evidence (Exit Code 0)."
         ),
-        tools=[coding_grep_search, coding_read_lines, coding_surgical_replace, coding_batch_surgical_replace, coding_check_syntax, execute_code],
+        tools=[coding_grep_search, coding_read_lines, coding_surgical_replace, coding_write_file, coding_batch_surgical_replace, coding_check_syntax, execute_code, rag_search_knowledge, rag_list_files],
         capabilities=types.SubagentCapabilities(
             enabled_tools=[types.BuiltinTools.VIEW_FILE, types.BuiltinTools.RUN_COMMAND]
         )

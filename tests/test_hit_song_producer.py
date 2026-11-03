@@ -1,11 +1,9 @@
 import os
 import sys
-import pytest
-from pathlib import Path
 
 sys.path.insert(0, "/data/data/com.termux/files/home/TUGUMIv6")
 
-from tools.media_tools import HitSongProducerEngine, GeminiMusicStudio
+from tools.media_tools import HitSongProducerEngine
 from fastapi.testclient import TestClient
 from interfaces.web.web_server import app
 
@@ -21,7 +19,7 @@ def test_hit_song_producer_presets():
     assert "lofi_bedroom" in presets
     assert "cyberpunk" in presets
 
-    for p_id, info in presets.items():
+    for _p_id, info in presets.items():
         assert "bpm" in info and isinstance(info["bpm"], int)
         assert "key" in info
         assert "chords" in info

@@ -15,6 +15,7 @@ import time
 import json
 import argparse
 import datetime
+import subprocess
 import urllib.request
 import urllib.parse
 from typing import Dict, Any, List, Optional
@@ -227,7 +228,7 @@ class DailyBriefingEngine:
                     # まず信頼性の高い一次ソースGoogle News RSSを優先、フォールバックでWeb検索
                     hits = self.researcher.search_news_rss(q, max_results=4)
                     if not hits or "error" in hits[0]:
-                        hits = self.researcher.search_web_lite(q, max_results=4)
+                        hits = self.researcher.search_web_lite(q, max_results=4, auto_crawl=True)
 
                     for h in hits:
                         title = h.get("title", "").strip()
@@ -366,8 +367,21 @@ class DailyBriefingEngine:
 【3. Termux & TUGUMIv6 実機診断メトリクス】:
 {telemetry_summary}
 
-【レポート必須構成 (Markdown形式)】:
+【レポート必須構成 (Markdown形式・商用100点満点規約)】:
 # ☀️ 【つぐみデイリーブリーフィング】本日（{today_formatted}）のインテリジェンス・サマリー
+
+> **メタデータ**: 配信日: {today_formatted}（{day_of_week}曜日） | 読了予測: 約4分 | 調査参謀: つぐみ (TUGUMIv6 SOTA Intelligence) | 拠点: 愛知県一宮市 | 機密度: 商用マスター
+
+---
+
+## 目次 (Table of Contents)
+- [1. 🌸 拓磨様への朝のご挨拶と温かい今日の一言](#1--拓磨様への朝のご挨拶と温かい今日の一言)
+- [2. 🌤️ 愛知県一宮市・尾張地方のリアルタイム気象インテリジェンス](#2-️-愛知県一宮市尾張地方のリアルタイム気象インテリジェンス)
+- [3. 🧠 最重要ピックアップ・テック＆AIエージェント最前線](#3--最重要ピックアップテックaiエージェント最前線)
+- [4. 💖 推し活・エンタメ最前線：乃木坂46 & 日向坂46 完全特集](#4--推し活エンタメ最前線乃木坂46--日向坂46-完全特集)
+- [5. 💻 Termux & TUGUMIv6 システムインフラ稼働状況サマリー](#5--termux--tugumiv6-システムインフラ稼働状況サマリー)
+- [6. 🎯 本日のおすすめアクションプラン & 注目タスク](#6--本日のおすすめアクションプラン--注目タスク)
+- [7. 🔗 一次ソース・参考文献一覧](#7--一次ソース参考文献一覧)
 
 ---
 
@@ -386,7 +400,8 @@ class DailyBriefingEngine:
 ### 3.1 🌐 グローバル・フロンティアAI速報＆主要モデル最新動向
 - Google Gemini、Anthropic Claude、OpenAI、DeepSeek等の最新リリース・新機能・業務連携（例: Gemini agentでのClaude連携など）の具体的発表ファクトと日程、一次ソースURLリンク。
 - モデル性能、推論時計算量（Test-Time Compute）、運用コストに関する業界潮流の考察。
-### 3.2 🛠️ 自律型エージェント＆システム開発工学の技術深層解説
+### 3.2 🛠️ 自律型エージェント＆システム開発工学の技術深層解説（Mermaid図必須）
+- **必ず最低1つのMermaid図（アーキテクチャ図または自律エージェント運用フロー図）を ```mermaid ... ``` で記述すること。**
 - 常時稼働型エージェント（Continuous/Autonomous Agent）、MCP（Model Context Protocol）、マルチエージェント基盤、オープンソースツール（AWS Strandsハーネス、Dots等）の最新アーキテクチャ。
 - 「単なる対話チャット」から「自律ワークフロー完遂」への進化の本質と課題。
 ### 3.3 💡 拓磨様の開発基盤（TUGUMIv6 / Termux / 自律自動化パイプライン）への具体的実装提言
@@ -416,11 +431,11 @@ class DailyBriefingEngine:
 ### 4.3 🎨 話題のカルチャー・アニメ・トレンドピックアップ
 - 現在注目のアニメ・カルチャー作品のハイライト。
 
-## 5. 💻 Termux & TUGUMIv6 システムインフラ稼働状況サマリー
+## 5. 💻 Termux & TUGUMIv6 システムインフラ稼働状況サマリー（HUD表）
 - 実機メトリクス（バッテリー残量・温度、CPU/RAM、ストレージ、連続稼働時間、SQLite WAL健全性）を表形式や箇条書きで美しく整理。
 - 端末のコンディションが万全であることの安心報告。
 
-## 6. 🎯 本日のおすすめアクションプラン & 注目タスク
+## 6. 🎯 本日のおすすめアクションプラン & 注目タスク（ToDo形式）
 - 本日取り組むべき開発・リサーチ・生活の具体的なおすすめステップ（3〜4項目）。
 
 ## 7. 🔗 一次ソース・参考文献一覧
@@ -438,36 +453,60 @@ class DailyBriefingEngine:
 
         report_markdown = report_markdown.strip()
 
-        # 5. TUGUMIDesk への保存
+        # 5. TUGUMIDesk への保存（Markdown & 美麗HTML デュアル保存）
         saved_desk_path = None
+        saved_desk_html_path = None
         saved_local_path = None
-        filename = f"{today_iso}_インテリジェント・デイリーブリーフィング.md"
+        saved_local_html_path = None
+        filename_base = f"{today_iso}_インテリジェント・デイリーブリーフィング"
+        filename_md = f"{filename_base}.md"
+        filename_html = f"{filename_base}.html"
+
+        # 美麗HTMLのレンダリング
+        briefing_title = f"☀️ 【つぐみデイリーブリーフィング】{today_formatted} インテリジェンス・サマリー"
+        html_content = self.researcher.render_beautiful_html(briefing_title, report_markdown, theme="Cyberpunk")
 
         if save_desk:
             os.makedirs(self.desk_briefing_dir, exist_ok=True)
-            desk_path = os.path.join(self.desk_briefing_dir, filename)
+            desk_path = os.path.join(self.desk_briefing_dir, filename_md)
+            desk_html_path = os.path.join(self.desk_briefing_dir, filename_html)
             counter = 2
-            while os.path.exists(desk_path):
-                desk_path = os.path.join(self.desk_briefing_dir, f"{today_iso}_インテリジェント・デイリーブリーフィング_{counter}.md")
+            while os.path.exists(desk_path) or os.path.exists(desk_html_path):
+                desk_path = os.path.join(self.desk_briefing_dir, f"{filename_base}_{counter}.md")
+                desk_html_path = os.path.join(self.desk_briefing_dir, f"{filename_base}_{counter}.html")
                 counter += 1
 
             try:
                 with open(desk_path, "w", encoding="utf-8") as f:
                     f.write(report_markdown + "\n")
+                with open(desk_html_path, "w", encoding="utf-8") as f:
+                    f.write(html_content + "\n")
                 saved_desk_path = desk_path
-                print(f"[✓] TUGUMIDesk 保存完了: {saved_desk_path}")
+                saved_desk_html_path = desk_html_path
+                print(f"[✓] TUGUMIDesk 保存完了: {saved_desk_path} & {saved_desk_html_path}")
+
+                # Android メディアスキャンの自動実行
+                try:
+                    subprocess.run(["termux-media-scan", desk_path, desk_html_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                except Exception:
+                    pass
             except Exception as e:
                 print(f"[!] TUGUMIDesk 保存エラー (内部ストレージにフォールバック): {e}")
 
         # 内部バックアップ保存（常時）
-        local_path = os.path.join(self.local_backup_dir, filename)
+        local_path = os.path.join(self.local_backup_dir, filename_md)
+        local_html_path = os.path.join(self.local_backup_dir, filename_html)
         counter = 2
-        while os.path.exists(local_path):
-            local_path = os.path.join(self.local_backup_dir, f"{today_iso}_インテリジェント・デイリーブリーフィング_{counter}.md")
+        while os.path.exists(local_path) or os.path.exists(local_html_path):
+            local_path = os.path.join(self.local_backup_dir, f"{filename_base}_{counter}.md")
+            local_html_path = os.path.join(self.local_backup_dir, f"{filename_base}_{counter}.html")
             counter += 1
         with open(local_path, "w", encoding="utf-8") as f:
             f.write(report_markdown + "\n")
+        with open(local_html_path, "w", encoding="utf-8") as f:
+            f.write(html_content + "\n")
         saved_local_path = local_path
+        saved_local_html_path = local_html_path
 
         elapsed = time.time() - start_time
         print(f"[✓] ブリーフィング生成完了 (所要時間: {elapsed:.1f}秒)")
@@ -487,7 +526,9 @@ class DailyBriefingEngine:
             "date": today_formatted,
             "day_of_week": day_of_week,
             "desk_path": saved_desk_path,
+            "desk_html_path": saved_desk_html_path,
             "local_path": saved_local_path,
+            "local_html_path": saved_local_html_path,
             "elapsed_seconds": round(elapsed, 2),
             "weather": weather,
             "notify_status": notify_status,

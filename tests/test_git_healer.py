@@ -4,7 +4,6 @@ TUGUMIv6 GitHealer & clone CLI Automated Test Suite
 
 import sys
 from pathlib import Path
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools.git_healer import GitHealer

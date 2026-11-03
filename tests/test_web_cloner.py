@@ -5,7 +5,6 @@ Tests for TUGUMIv6 Web Cloner & WebUI Clone Studio Integration
 
 import os
 import sys
-import shutil
 import pytest
 from starlette.testclient import TestClient
 
@@ -15,7 +14,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from tools.web_cloner import WebCloner
-from tools.antigravity_tools import clone_website, get_tugumi_tools
+from tools.antigravity_tools import get_tugumi_tools
 from interfaces.web.web_server import app, TOOL_CATEGORIES
 
 @pytest.fixture

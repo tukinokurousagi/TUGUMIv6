@@ -679,110 +679,169 @@ class AntigravitySession:
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
+        def _is_ws_closed_error(err: BaseException) -> bool:
+            msg = str(err)
+            cls_name = type(err).__name__
+            return (
+                "ConnectionClosed" in cls_name
+                or "received 1000" in msg
+                or "then sent 1000" in msg
+                or "sent 1000" in msg
+                or "received 1001" in msg
+                or "Harness process exited" in msg
+                or ("WebSocket" in msg and "closed" in msg.lower())
+                or "cannot call recv" in msg.lower()
+                or "connection is closed" in msg.lower()
+            )
+
         async def _main():
             self.async_in_q = asyncio.Queue()
-            config = self.engine.build_config(
-                system_instruction=self.system_instruction,
-                thinking_level=self.thinking_level,
-                mode=self.mode
-            )
-            try:
-                async with Agent(config) as agent:
-                    self.current_agent = agent
-                    self.ready_event.set()
-                    while self.active:
-                        req = await self.async_in_q.get()
-                        if req is None or not self.active:
-                            break
-                        prompt, out_sync_q = req
-                        self.current_out_q = out_sync_q
-                        self.turn_count += 1
-                        self._cancel_requested.clear()
+            retry_req = None
 
-                        async def _execute(prompt=prompt, out_sync_q=out_sync_q):
-                            waiting_tool_execution = False
-                            last_tool_call_name = ""
-                            try:
-                                # 初回レスポンス到達タイムアウト（120秒）で永久ハングを物理遮断
-                                resp = await asyncio.wait_for(agent.chat(prompt), timeout=120.0)
-                                chunk_iter = resp.chunks.__aiter__()
-                                while True:
-                                    if self._cancel_requested.is_set():
+            while self.active:
+                config = self.engine.build_config(
+                    system_instruction=self.system_instruction,
+                    thinking_level=self.thinking_level,
+                    mode=self.mode
+                )
+                try:
+                    async with Agent(config) as agent:
+                        self.current_agent = agent
+                        self.ready_event.set()
+                        reconnect_needed = False
+
+                        while self.active and not reconnect_needed:
+                            if retry_req is not None:
+                                req = retry_req
+                                retry_req = None
+                            else:
+                                req = await self.async_in_q.get()
+
+                            if req is None or not self.active:
+                                self.active = False
+                                break
+
+                            if len(req) == 3:
+                                prompt, out_sync_q, is_retry = req
+                            else:
+                                prompt, out_sync_q = req
+                                is_retry = False
+
+                            self.current_out_q = out_sync_q
+                            if not is_retry:
+                                self.turn_count += 1
+                            self._cancel_requested.clear()
+
+                            async def _execute(prompt=prompt, out_sync_q=out_sync_q, is_retry=is_retry):
+                                nonlocal reconnect_needed, retry_req
+                                waiting_tool_execution = False
+                                last_tool_call_name = ""
+                                emitted_any = False
+                                try:
+                                    # 初回レスポンス到達タイムアウト（120秒）で永久ハングを物理遮断
+                                    resp = await asyncio.wait_for(agent.chat(prompt), timeout=120.0)
+                                    chunk_iter = resp.chunks.__aiter__()
+                                    while True:
+                                        if self._cancel_requested.is_set():
+                                            try:
+                                                await agent.conversation.cancel()
+                                            except Exception:
+                                                pass
+                                            out_sync_q.put(("cancelled", "Task cancelled"))
+                                            break
                                         try:
-                                            await agent.conversation.cancel()
-                                        except Exception:
-                                            pass
-                                        out_sync_q.put(("cancelled", "Task cancelled"))
-                                        break
+                                            # ツール実行中はツールの実行完了を待つため360秒、通常チャンク間は180秒
+                                            curr_timeout = 360.0 if waiting_tool_execution else 180.0
+                                            chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=curr_timeout)
+                                        except StopAsyncIteration:
+                                            break
+                                        except asyncio.TimeoutError:
+                                            try:
+                                                await agent.conversation.cancel()
+                                            except Exception:
+                                                pass
+                                            err_msg = (
+                                                f"ツール実行タイムアウト (360秒待機超過: 直前ツール '{last_tool_call_name or '不明'}') - プロセスのハングまたは長期実行を安全遮断しました"
+                                                if waiting_tool_execution
+                                                else "ストリーミングチャンク受信タイムアウト (180秒無通信検知)"
+                                            )
+                                            out_sync_q.put(("error", err_msg))
+                                            break
+
+                                        if self._cancel_requested.is_set():
+                                            try:
+                                                await agent.conversation.cancel()
+                                            except Exception:
+                                                pass
+                                            out_sync_q.put(("cancelled", "Task cancelled"))
+                                            break
+                                        if isinstance(chunk, agy_types.Thought):
+                                            emitted_any = True
+                                            out_sync_q.put(("thought", chunk.text))
+                                        elif isinstance(chunk, agy_types.Text):
+                                            emitted_any = True
+                                            out_sync_q.put(("text", chunk.text))
+                                        elif isinstance(chunk, agy_types.ToolCall):
+                                            emitted_any = True
+                                            waiting_tool_execution = True
+                                            last_tool_call_name = getattr(chunk, "name", "tool")
+                                            out_sync_q.put(("tool_call", chunk))
+                                        elif isinstance(chunk, agy_types.ToolResult):
+                                            emitted_any = True
+                                            waiting_tool_execution = False
+                                            out_sync_q.put(("tool_result", chunk))
+                                except asyncio.TimeoutError:
                                     try:
-                                        # ツール実行中はツールの実行完了を待つため360秒、通常チャンク間は180秒
-                                        curr_timeout = 360.0 if waiting_tool_execution else 180.0
-                                        chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=curr_timeout)
-                                    except StopAsyncIteration:
-                                        break
-                                    except asyncio.TimeoutError:
-                                        try:
-                                            await agent.conversation.cancel()
-                                        except Exception:
-                                            pass
-                                        err_msg = (
-                                            f"ツール実行タイムアウト (360秒待機超過: 直前ツール '{last_tool_call_name or '不明'}') - プロセスのハングまたは長期実行を安全遮断しました"
-                                            if waiting_tool_execution
-                                            else "ストリーミングチャンク受信タイムアウト (180秒無通信検知)"
-                                        )
-                                        out_sync_q.put(("error", err_msg))
-                                        break
+                                        await agent.conversation.cancel()
+                                    except Exception:
+                                        pass
+                                    out_sync_q.put(("error", "API接続・初回レスポンス待機タイムアウト (120秒無応答ハング検知)"))
+                                except asyncio.CancelledError:
+                                    try:
+                                        await agent.conversation.cancel()
+                                    except Exception:
+                                        pass
+                                    out_sync_q.put(("cancelled", "Task cancelled"))
+                                except Exception as e:
+                                    if _is_ws_closed_error(e):
+                                        reconnect_needed = True
+                                        if not emitted_any and not is_retry and not self._cancel_requested.is_set():
+                                            # 1チャンクも送出する前にWebSocket切断(1000 OK等)を検知した場合、新規Agentセッションへ透過再接続して自動再試行
+                                            retry_req = (prompt, out_sync_q, True)
+                                            return
+                                    out_sync_q.put(("error", str(e)))
+                                finally:
+                                    if retry_req is None:
+                                        out_sync_q.put(("done", None))
 
-                                    if self._cancel_requested.is_set():
-                                        try:
-                                            await agent.conversation.cancel()
-                                        except Exception:
-                                            pass
-                                        out_sync_q.put(("cancelled", "Task cancelled"))
-                                        break
-                                    if isinstance(chunk, agy_types.Thought):
-                                        out_sync_q.put(("thought", chunk.text))
-                                    elif isinstance(chunk, agy_types.Text):
-                                        out_sync_q.put(("text", chunk.text))
-                                    elif isinstance(chunk, agy_types.ToolCall):
-                                        waiting_tool_execution = True
-                                        last_tool_call_name = getattr(chunk, "name", "tool")
-                                        out_sync_q.put(("tool_call", chunk))
-                                    elif isinstance(chunk, agy_types.ToolResult):
-                                        waiting_tool_execution = False
-                                        out_sync_q.put(("tool_result", chunk))
-                            except asyncio.TimeoutError:
-                                try:
-                                    await agent.conversation.cancel()
-                                except Exception:
-                                    pass
-                                out_sync_q.put(("error", "API接続・初回レスポンス待機タイムアウト (120秒無応答ハング検知)"))
-                            except asyncio.CancelledError:
-                                try:
-                                    await agent.conversation.cancel()
-                                except Exception:
-                                    pass
-                                out_sync_q.put(("cancelled", "Task cancelled"))
-                            except Exception as e:
-                                out_sync_q.put(("error", str(e)))
+                            self.current_task = asyncio.create_task(_execute())
+                            try:
+                                await self.current_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
                             finally:
-                                out_sync_q.put(("done", None))
-
-                        self.current_task = asyncio.create_task(_execute())
+                                self.current_task = None
+                                if retry_req is None:
+                                    self.current_out_q = None
+                except asyncio.CancelledError:
+                    self.ready_event.set()
+                    break
+                except Exception as e:
+                    self.ready_event.set()
+                    if retry_req is not None:
+                        _, failed_q, _ = retry_req
+                        retry_req = None
                         try:
-                            await self.current_task
-                        except (asyncio.CancelledError, Exception):
+                            failed_q.put(("error", f"Antigravity再接続エラー: {e}"))
+                            failed_q.put(("done", None))
+                        except Exception:
                             pass
-                        finally:
-                            self.current_task = None
-                            self.current_out_q = None
-            except asyncio.CancelledError:
-                self.ready_event.set()
-            except Exception as e:
-                self.ready_event.set()
-                print(f"[AntigravitySession] Worker error: {e}")
-            finally:
-                self.current_agent = None
+                    print(f"[AntigravitySession] Worker error: {e}")
+                    if not self.active:
+                        break
+                    await asyncio.sleep(0.2)
+                finally:
+                    self.current_agent = None
 
         try:
             self.loop.run_until_complete(_main())

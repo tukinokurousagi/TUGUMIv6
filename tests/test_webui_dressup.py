@@ -15,11 +15,26 @@ def client():
 
 
 def test_dressup_references_endpoint(client):
-    """リファレンス画像（金型モデル・最新スクショ）取得エンドポイントの検証"""
+    """リファレンス画像（専属モデル一覧・金型モデル・最新スクショ）取得エンドポイントの検証"""
+    import os
+
+    import tools.media_tools as mt
+
+    # テスト環境の IMAGES_DIR に models ディレクトリとダミーモデルを作成
+    models_dir = os.path.join(mt.IMAGES_DIR, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    with open(os.path.join(models_dir, "model_01_pure_seiso.png"), "wb") as f:
+        f.write(b"MOCK_MODEL_1")
+    with open(os.path.join(models_dir, "model_02_elegance_01.png"), "wb") as f:
+        f.write(b"MOCK_MODEL_2")
+
     resp = client.get("/api/image/dressup/references")
     assert resp.status_code == 200
     data = resp.json()
     assert data["success"] is True
+    assert "exclusive_models" in data
+    assert isinstance(data["exclusive_models"], list)
+    assert len(data["exclusive_models"]) >= 2
     assert "latest_screenshot" in data
     assert "gold_model" in data
     assert "recent_models" in data
@@ -130,3 +145,40 @@ def test_media_delete_endpoint(client):
     # 2. 既に削除されたファイルの再削除（404）
     del_resp2 = client.post("/api/media/delete", json={"filename": uploaded_name, "folder": "uploads", "file_type": "image"})
     assert del_resp2.status_code == 404
+
+
+def test_expand_pattern_endpoint(client):
+    """POST /api/image/dressup/expand_pattern マルチパターン生成APIの検証（モック）"""
+    import os
+
+    import tools.media_tools as mt
+
+    models_dir = os.path.join(mt.IMAGES_DIR, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    base_file = os.path.join(models_dir, "model_02_elegance_01.png")
+    with open(base_file, "wb") as f:
+        f.write(b"MOCK_MODEL_2_BASE")
+
+    mock_res = {
+        "success": True,
+        "file_path": "/storage/emulated/0/TUGUMIDesk/Images/model_02_elegance_02_closeup_smile.png",
+        "filename": "model_02_elegance_02_closeup_smile.png",
+        "model": "gemini-3.1-flash-image",
+        "pattern_type": "closeup_smile",
+        "model_prefix": "model_02_elegance"
+    }
+    with patch("tools.media_tools.GeminiImageStudio.generate_model_pattern", return_value=mock_res):
+        resp = client.post(
+            "/api/image/dressup/expand_pattern",
+            json={
+                "image_paths": [base_file],
+                "pattern_type": "closeup_smile",
+                "model_prefix": "model_02_elegance"
+            }
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["pattern_type"] == "closeup_smile"
+        assert "preview_url" in data
+

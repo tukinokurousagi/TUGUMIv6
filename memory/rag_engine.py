@@ -893,7 +893,18 @@ class HybridRAGEngine:
                 content_map[key]["score"] = max(content_map[key].get("score", 0.0), l_sc)
                 content_map[key]["lex_score"] = l_sc
 
-        ranked_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
+        # 同一ファイルの複数チャンクが上位を独占するのを防ぐため、ファイル単位の多様性減衰 (Per-file Diversity Decay) を適用
+        prelim_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
+        file_seen_counts: Dict[str, int] = {}
+        adjusted_rrf: Dict[str, float] = {}
+        for k in prelim_keys:
+            entry_ref = content_map[k]
+            src_id = entry_ref.get("source") or entry_ref.get("rel_path") or entry_ref.get("title") or k
+            seen = file_seen_counts.get(src_id, 0)
+            adjusted_rrf[k] = rrf_scores[k] * (0.55 ** seen)
+            file_seen_counts[src_id] = seen + 1
+
+        ranked_keys = sorted(adjusted_rrf.keys(), key=lambda k: adjusted_rrf[k], reverse=True)
         final_results: List[Dict[str, Any]] = []
         for k in ranked_keys[:top_k]:
             entry = dict(content_map[k])
@@ -910,7 +921,7 @@ class HybridRAGEngine:
             entry["category"] = folder_val
             entry["role"] = role_code
             entry["role_label"] = role_label
-            entry["rrf_score"] = round(rrf_scores[k], 5)
+            entry["rrf_score"] = round(adjusted_rrf[k], 5)
             entry["score"] = round(lex_sc if lex_sc > 0 else dense_sc, 4)
             final_results.append(entry)
 
@@ -951,7 +962,9 @@ class HybridRAGEngine:
             role_label = h.get("role_label", "📘 ナレッジ")
             raw_txt = h.get("text", "")
             score = h.get("score", 0.0)
-            titles_summary.append(f"[{folder}] {title}")
+            label_item = f"[{folder}] {title}"
+            if label_item not in titles_summary:
+                titles_summary.append(label_item)
             blocks.append(f"### [{idx}] {role_label}: `{title}` (Folder: `{folder}` | Score: {score})\n{raw_txt}")
 
         context_text = (

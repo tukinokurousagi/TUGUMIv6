@@ -1884,6 +1884,7 @@ Combine the characters, elements, lighting, and aesthetic styles into a single u
 
         # 上下の黒帯自動トリミング処理
         processed_paths = []
+        tmp_created = []
         for p in valid_paths:
             cropped_done = False
             if auto_crop_black_bars and Image and np is not None:
@@ -1896,22 +1897,32 @@ Combine the characters, elements, lighting, and aesthetic styles into a single u
                             top, bottom = valid_rows[0], valid_rows[-1]
                             cropped = img.crop((0, top, img.width, bottom + 1))
                             tmp_f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                            tmp_f.close()
                             cropped.save(tmp_f.name, "PNG")
                             processed_paths.append(tmp_f.name)
+                            tmp_created.append(tmp_f.name)
                             cropped_done = True
                 except Exception:
                     pass
             if not cropped_done:
                 processed_paths.append(p)
 
-        # Gemini Part 構築
+        # Gemini Part 構築 & 一時ファイル即時クリーンアップ
         parts = []
-        for p in processed_paths:
-            with open(p, "rb") as f:
-                b = f.read()
-            ext = os.path.splitext(p)[1].lower()
-            mime = "image/png" if ext == ".png" else "image/jpeg"
-            parts.append(types.Part.from_bytes(data=b, mime_type=mime))
+        try:
+            for p in processed_paths:
+                with open(p, "rb") as f:
+                    b = f.read()
+                ext = os.path.splitext(p)[1].lower()
+                mime = "image/png" if ext == ".png" else "image/jpeg"
+                parts.append(types.Part.from_bytes(data=b, mime_type=mime))
+        finally:
+            for tf in tmp_created:
+                try:
+                    if os.path.isfile(tf):
+                        os.remove(tf)
+                except Exception:
+                    pass
 
         # 衣装・背景・ポーズの指定とプロンプト昇華
         outfit_desc = outfit.strip() if outfit else "stylish elegant casual clothing"
@@ -1919,10 +1930,10 @@ Combine the characters, elements, lighting, and aesthetic styles into a single u
         pose_desc = mood_or_pose.strip() if mood_or_pose else "looking softly into the camera with an affectionate sweet gaze"
 
         prompt_instruction = f"""
-You are provided with {len(parts)} reference image(s) of a Japanese idol beauty model.
+You are provided with {len(parts)} multi-angle reference image(s) of the exact same Japanese beauty model.
 CRITICAL MANDATE:
-1. FACIAL IDENTITY LOCK (Character DNA):
-Strictly maintain and lock the exact same facial bone structure, facial contours, almond dark eyes, eyelid creases, distinct soft aegyo-sal (puffy teardrop bags), nose shape, naturally pillowy lips, straight jet-black hair with delicate airy see-through fringe bangs, and translucent porcelain skin identical to the girl in the reference images. Her face must NOT change or become someone else.
+1. MULTI-REFERENCE 3D FACIAL IDENTITY LOCK (Character DNA):
+Cross-reference all {len(parts)} reference image(s) to reconstruct and strictly lock her 3D facial bone structure, jawline, cheekbone contours, large expressive almond eyes, double eyelid creases, distinct soft aegyo-sal (teardrop bags), slender nose bridge, naturally pillowy lips, exact hair color and tone, delicate airy see-through fringe bangs, and translucent skin texture. She MUST be 100% recognizable as the exact same individual in the reference images without any identity drift.
 
 2. OUTFIT TRANSFORMATION:
 Completely transform and dress her in the following outfit:
@@ -1991,6 +2002,81 @@ Authentic unretouched micro-skin texture, subtle pores, natural hydration, zero 
                 continue
 
         return {"success": False, "error": f"着せ替え生成エラー: {last_error}"}
+
+    @classmethod
+    def generate_model_pattern(
+        cls,
+        image_paths: Union[str, List[str]],
+        pattern_type: str = "closeup_smile",
+        model_prefix: str = "model_02_elegance"
+    ) -> Dict[str, Any]:
+        """
+        同一専属モデルの複数リファレンス画像をアンカーとして、別角度・別表情のマスターパターン画像を生成し、
+        専属モデルのマルチアングルDNAパック（/Images/models/）に追加登録する。
+        """
+        if isinstance(image_paths, str):
+            image_paths = [image_paths]
+        valid_paths = [p for p in image_paths if os.path.isfile(p)]
+        if not valid_paths:
+            return {"success": False, "error": "有効なベースモデル画像が見つかりません。"}
+
+        pattern_presets = {
+            "closeup_smile": {
+                "outfit": "simple clean off-white ribbed knit top that highlights her facial features and collarbone",
+                "bg": "softly lit bright minimalist studio by a sunny window with gentle natural bokeh",
+                "pose": "intimate front-facing close-up portrait, gentle affectionate warm smile, eyes sparkling with clear catchlights, head-and-shoulders framing"
+            },
+            "angle_45": {
+                "outfit": "elegant light beige cashmere sweater with soft texture",
+                "bg": "bright airy modern room with soft morning daylight from the side",
+                "pose": "three-quarter (45-degree angle) portrait, softly tilting her head while gazing directly into the camera, clearly showing her 3D jawline, nose bridge profile, and cheekbone contour"
+            },
+            "looking_back": {
+                "outfit": "classic tailored navy cardigan over a white blouse",
+                "bg": "sunlit hallway with warm golden afternoon light streaming through windows",
+                "pose": "gracefully looking back over her shoulder towards the camera, hair softly swaying, capturing both her side-angle facial contour and sweet eye contact"
+            },
+            "candid_laugh": {
+                "outfit": "cozy oversized cream knit cardigan",
+                "bg": "warm sunlit cafe table with soft background blur",
+                "pose": "caught mid-candid moment with a shy, genuine happy smile, lightly touching her cheek with one hand, natural and lively expression"
+            }
+        }
+
+        preset = pattern_presets.get(pattern_type, pattern_presets["closeup_smile"])
+        models_dir = os.path.join(IMAGES_DIR, "models")
+        os.makedirs(models_dir, exist_ok=True)
+
+        # 次の連番を決定（既存ファイルと衝突しない番号を安全に採番）
+        existing = [
+            f for f in os.listdir(models_dir)
+            if f.startswith(model_prefix) and f.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+        next_idx = len(existing) + 1
+        out_fname = f"{model_prefix}_{next_idx:02d}_{pattern_type}.png"
+        while os.path.exists(os.path.join(models_dir, out_fname)) or os.path.exists(os.path.join(IMAGES_DIR, out_fname)):
+            next_idx += 1
+            out_fname = f"{model_prefix}_{next_idx:02d}_{pattern_type}.png"
+
+        res = cls.face_lock_dressup(
+            image_paths=valid_paths,
+            outfit=preset["outfit"],
+            background=preset["bg"],
+            mood_or_pose=preset["pose"],
+            output_filename=out_fname,
+            auto_crop_black_bars=True
+        )
+        if res.get("success") and res.get("file_path"):
+            import shutil
+            src_path = res["file_path"]
+            dst_path = os.path.join(models_dir, out_fname)
+            if os.path.abspath(src_path) != os.path.abspath(dst_path):
+                shutil.copy2(src_path, dst_path)
+            _scan_media_file(dst_path)
+            res["model_pack_path"] = dst_path
+            res["pattern_type"] = pattern_type
+            res["model_prefix"] = model_prefix
+        return res
 
     @classmethod
     def to_ascii(cls, image_path: str, target_width: int = 44) -> str:

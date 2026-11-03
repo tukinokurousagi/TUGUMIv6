@@ -3652,6 +3652,11 @@ class ImageDressupRequest(BaseModel):
     output_filename: Optional[str] = ""
     auto_crop_black_bars: Optional[bool] = True
 
+class DressupPatternExpandRequest(BaseModel):
+    image_paths: List[str] = []
+    pattern_type: str = "closeup_smile"
+    model_prefix: str = "model_02_elegance"
+
 @app.post("/api/image/studio/execute")
 async def api_image_studio_execute(req: ImageStudioExecuteRequest):
     """WebUI Image Studio からの統合実行エンドポイント"""
@@ -3747,25 +3752,151 @@ async def api_image_dressup(req: ImageDressupRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
+@app.post("/api/image/dressup/expand_pattern")
+async def api_image_dressup_expand_pattern(req: DressupPatternExpandRequest):
+    """専属モデルの既存画像をマルチアンカーとして、別角度・別表情の新パターン画像を生成しDNAパックに追加"""
+    try:
+        from tools.media_tools import ImageStudioEngine, IMAGES_DIR
+        valid_paths = [p for p in req.image_paths if os.path.isfile(p)]
+        if not valid_paths:
+            models_dir = os.path.join(IMAGES_DIR, "models")
+            if os.path.isdir(models_dir):
+                valid_paths = [
+                    os.path.join(models_dir, f)
+                    for f in sorted(os.listdir(models_dir))
+                    if f.startswith(req.model_prefix) and f.lower().endswith((".png", ".jpg", ".jpeg"))
+                ]
+        if not valid_paths:
+            return JSONResponse(status_code=400, content={"success": False, "error": "ベースとなる専属モデル画像が見つかりません。"})
+
+        res = await asyncio.to_thread(
+            ImageStudioEngine.generate_model_pattern,
+            image_paths=valid_paths,
+            pattern_type=req.pattern_type or "closeup_smile",
+            model_prefix=req.model_prefix or "model_02_elegance"
+        )
+        if res.get("success") and res.get("file_path"):
+            fname = os.path.basename(res["file_path"])
+            res["preview_url"] = f"/api/media/file/image/{fname}"
+        return res
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
 @app.get("/api/image/dressup/references")
 async def api_image_dressup_references():
-    """着せ替え用リファレンス画像（最新スクショ・金型モデル・モデル履歴）候補一覧を返却"""
+    """着せ替え用リファレンス画像（専属モデルDNAパック・最新スクショ・金型モデル・モデル履歴）候補一覧を返却"""
     try:
         from tools.media_tools import IMAGES_DIR
         result = {
             "latest_screenshot": None,
             "gold_model": None,
+            "exclusive_models": [],
+            "model_packs": [],
             "recent_models": [],
             "recent_screenshots": []
         }
 
-        # 1. 金型モデル
+        # 0. 専属モデル一覧 & マルチパターンDNAパック構築
+        models_dir = os.path.join(IMAGES_DIR, "models")
+        raw_files = []
+        registered_names = set()
+
+        if os.path.isdir(models_dir):
+            for f in sorted(os.listdir(models_dir)):
+                if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    raw_files.append((f, os.path.join(models_dir, f)))
+                    registered_names.add(f)
+
+        if os.path.isdir(IMAGES_DIR):
+            for f in sorted(os.listdir(IMAGES_DIR)):
+                if f.startswith("model_") and f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    if f not in registered_names:
+                        raw_files.append((f, os.path.join(IMAGES_DIR, f)))
+                        registered_names.add(f)
+
+        # モデルプレフィックスごとにグルーピング
+        groups = {}
+        for fname, fpath in raw_files:
+            if "pure_seiso" in fname or fname.startswith("model_01"):
+                prefix = "model_01_pure_seiso"
+                group_title = "👑 初代: 清楚ヒロイン"
+            elif "elegance" in fname or fname.startswith("model_02"):
+                prefix = "model_02_elegance"
+                group_title = "✨ 専属No.2: 上品エレガンス"
+            else:
+                parts_name = os.path.splitext(fname)[0].split("_")
+                prefix = "_".join(parts_name[:2]) if len(parts_name) >= 2 else parts_name[0]
+                group_title = f"💎 専属: {prefix}"
+
+            if prefix not in groups:
+                groups[prefix] = {
+                    "model_prefix": prefix,
+                    "group_title": group_title,
+                    "patterns": []
+                }
+
+            # パターンタグ判定
+            ptag = "基本"
+            if "closeup_smile" in fname:
+                ptag = "正面微笑み"
+            elif "angle_45" in fname:
+                ptag = "斜め45度"
+            elif "looking_back" in fname:
+                ptag = "振り返り"
+            elif "candid_laugh" in fname:
+                ptag = "自然笑顔"
+            elif "elegance_01" in fname:
+                ptag = "正面・指添え"
+            elif "elegance_02" in fname:
+                ptag = "見上げ・頬杖"
+            elif "pure_seiso_01" in fname or fname == "model_01_pure_seiso.png":
+                ptag = "正面クローズアップ"
+            elif "pure_seiso_02" in fname or "window" in fname:
+                ptag = "窓辺斜め"
+
+            groups[prefix]["patterns"].append({
+                "name": fname,
+                "tag": ptag,
+                "label": f"{group_title} ({ptag})",
+                "path": fpath,
+                "preview_url": f"/api/media/file/image/{fname}"
+            })
+
+        model_packs = []
+        exclusive_list = []
+        for prefix, gdata in groups.items():
+            pats = gdata["patterns"]
+            all_paths = [p["path"] for p in pats]
+            rep = pats[0]
+            pack_obj = {
+                "name": rep["name"],
+                "model_prefix": prefix,
+                "label": f"{gdata['group_title']} (🧬{len(pats)}パターン)",
+                "short_label": gdata["group_title"],
+                "path": rep["path"],
+                "all_paths": all_paths,
+                "pattern_count": len(pats),
+                "patterns": pats,
+                "preview_url": rep["preview_url"]
+            }
+            model_packs.append(pack_obj)
+            # 互換性および一覧表示のため、exclusive_models にはモデルパック代表＋個別パターンを格納
+            exclusive_list.append(pack_obj)
+
+        result["model_packs"] = model_packs
+        result["exclusive_models"] = exclusive_list
+
+        # 1. 金型モデル (初代)
         gold_path = os.path.join(IMAGES_DIR, "ref_model_closeup.png")
         if os.path.isfile(gold_path):
+            gold_all = [gold_path]
+            if "model_01_pure_seiso" in groups:
+                gold_all = [p["path"] for p in groups["model_01_pure_seiso"]["patterns"]]
             result["gold_model"] = {
                 "name": "ref_model_closeup.png",
-                "label": "⭐ 金型モデル (黄金比・至高清楚系)",
+                "label": f"⭐ 初代金型モデル (🧬{len(gold_all)}パターン)",
                 "path": gold_path,
+                "all_paths": gold_all,
                 "preview_url": "/api/media/file/image/ref_model_closeup.png"
             }
 
@@ -4210,6 +4341,8 @@ async def api_get_media_file(file_type: str, filename: str):
     clean_name = os.path.basename(filename)
     target_dir = MUSIC_DIR if file_type == "music" else IMAGES_DIR
     file_path = os.path.join(target_dir, clean_name)
+    if not os.path.isfile(file_path) and file_type == "image":
+        file_path = os.path.join(IMAGES_DIR, "models", clean_name)
     if not os.path.isfile(file_path) and file_type == "image":
         file_path = os.path.join(IMAGES_DIR, "uploads", clean_name)
     if not os.path.isfile(file_path) and file_type == "image":

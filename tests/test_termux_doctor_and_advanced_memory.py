@@ -10,7 +10,6 @@ Tests for TUGUMIv6 TermuxDoctor & AdvancedMemoryEngine & Antigravity Tools Integ
 import os
 import sys
 import json
-import pytest
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -20,12 +19,11 @@ from core.termux_doctor import TermuxDoctor
 from memory.advanced_memory import AdvancedMemoryEngine
 from tools.antigravity_tools import (
     termux_inspect_environment,
-    termux_maintain_environment,
     memory_recall_context,
     memory_remember_fact,
     get_tugumi_tools
 )
-from persona.soul import get_system_prompt, Soul
+from persona.soul import get_system_prompt
 
 def test_termux_doctor_inspection():
     """TermuxDoctor の全レイヤー深層把握検証"""

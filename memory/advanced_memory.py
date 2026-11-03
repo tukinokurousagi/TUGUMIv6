@@ -50,14 +50,14 @@ class AdvancedMemoryEngine:
                 )
                 self.sql.add_memory(
                     category="master_profile",
-                    subject="お好きなお花",
-                    fact_content="拓磨様のお好きなお花（Favorite Flower）は『青い蓮（BLUE LOTUS）』。",
+                    subject="お好きなお花・花見",
+                    fact_content="拓磨様のお好きなお花は『桜』。桜を見ながらお酒を呑むひとときを至福と愛好されている。",
                     importance=5
                 )
                 self.sql.add_memory(
                     category="master_profile",
                     subject="お好きな星",
-                    fact_content="拓磨様のお好きな星（Favorite Star）は『SIRIUS（シリウス）』。",
+                    fact_content="拓磨様のお好きな星（Favorite Star）は『金星（Venus）』。最も愛好される美しい星。",
                     importance=5
                 )
                 # 2. システム絶対方針

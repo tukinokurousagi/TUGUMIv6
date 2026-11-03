@@ -1,0 +1,1 @@
+/data/data/com.termux/files/home/TUGUMIv6/persona/SOUL.md

@@ -3,11 +3,7 @@
 Unit & Integration Tests for TUGUMIv6 4-Tier & Ebbinghaus Decay Memory Engine
 """
 
-import os
 import sys
-import pytest
-import sqlite3
-import json
 
 # Ensure TUGUMIv6 is in path
 TUGUMI_ROOT = "/data/data/com.termux/files/home/TUGUMIv6"

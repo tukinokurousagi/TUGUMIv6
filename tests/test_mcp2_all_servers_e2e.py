@@ -9,7 +9,6 @@ Verifies:
 """
 
 import sys
-import os
 import json
 import unittest
 
@@ -19,7 +18,7 @@ if project_root not in sys.path:
 
 from tools.tugumi_mcp import mcp
 from tools.mcp_client import MCPClient
-from tools.antigravity_tools import execute_code, mcp_call, mcp2_protocol_info
+from tools.antigravity_tools import execute_code, mcp2_protocol_info
 
 class TestAllMCP2ServersE2E(unittest.TestCase):
     @classmethod

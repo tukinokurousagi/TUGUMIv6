@@ -17,7 +17,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from tools.antigravity_tools import execute_code, get_tugumi_tools
-from tools.tugumi_mcp import mcp, MCP20Engine
+from tools.tugumi_mcp import mcp
 
 class TestCodeModeMCP2(unittest.TestCase):
     def test_tools_registration(self):

@@ -59,7 +59,9 @@ MAIN_COMMANDS: Dict[str, str] = {
     "/verify": "納品前5層検証ゲート自己診断テスト実行",
     "/heal": "自律修復・健全性回復 (全コード構文スキャン＆自動修復)",
     "/sync": "スマホ外部ストレージ (TUGUMIDesk) 双方向同期",
-    "/evolve": "自己進化エンジン (SOTA知見探知・監査・RAG注入)",
+    "/evolve": "自己進化エンジン (SOTA知見探知・10大ピラー監査・ツール合成・RAG注入)",
+    "/sdk": "Antigravity SDK 10大進化ピラー・最新仕様検視・エンジン制御 (/sdk [status|spec|gap|engine|reset])",
+    "/antigravity": "Antigravity SDK 診断・制御ショートカット (/sdk と同等)",
     "/context": "コンテキスト消費・履歴剪定ステータス (ContextGuard)",
     "/save": "現在の会話セッションをTUGUMIDeskへ保存 (/save [タイトル])",
     "/thinking": "推論思考強度切替 (High ⇄ Medium ⇄ Low ⇄ Minimal)",
@@ -136,6 +138,27 @@ BINANCE_META: Dict[str, str] = {
     "cron": "⏰ 定期自律パトロール管理 (/binance cron status|start|stop)",
 }
 
+SDK_META: Dict[str, str] = {
+    "status": "🚀 Antigravity SDK 10大進化ピラー・常駐セッション・Hooks v2 ライブ診断 (/sdk status)",
+    "spec": "🔬 google-antigravity SDK 全クラス・26フィールド・Hooks v2 ライブ検視 (/sdk spec)",
+    "gap": "📊 10大進化ピラー AST Gap分析＆実機設定検証 (/sdk gap)",
+    "verify": "✅ AntigravityEngine.build_config() 実機検証ゲート実行 (/sdk verify)",
+    "tools": "🛠️ ネイティブ登録ツール＆動的合成ツール一覧 (/sdk tools)",
+    "engine": "⚡ プライマリ推論エンジン切替 (/sdk engine antigravity|gemini)",
+    "reset": "🔄 常駐 AntigravitySession クリーンリセット (/sdk reset)",
+}
+
+EVOLVE_META: Dict[str, str] = {
+    "status": "📊 10大進化ピラー＆システム衛生即時監査 (API消費ゼロ: /evolve status)",
+    "check": "✅ Antigravity SDK 10大進化ピラー実機検証ゲート (/evolve check)",
+    "gap": "🔍 AST Evolution Gap 分析レポート表示 (/evolve gap)",
+    "spec": "🔬 google-antigravity SDK 最新仕様ライブ検視 (/evolve spec)",
+    "tools": "🛠️ 自己進化で動的合成されたツール一覧・詳細 (/evolve tools)",
+    "audit": "🩺 6大ドメイン・システムアーキテクチャ深層監査 (/evolve audit)",
+    "fast": "⚡ 高速自己進化サイクル実行 (SOTA探知＋合成＋高速検証: /evolve fast [topic])",
+    "run": "🚀 フル5フェーズ自己進化サイクル実行 (/evolve run [topic])",
+}
+
 
 def load_skills_with_descriptions() -> Dict[str, str]:
     """Reads ~/.agents/skills/*/SKILL.md to extract clean 1-line Japanese descriptions."""
@@ -204,17 +227,35 @@ class TugumiRichCompleter(Completer):
         self.skills_meta = load_skills_with_descriptions()
         self._update_mtime_record()
 
-    def _update_mtime_record(self):
+    def _compute_skills_signature(self) -> float:
+        """~/.agents/skills 直下の増減および各サブディレクトリ内の SKILL.md 更新を両方高速検知"""
+        if not os.path.exists(self._skills_dir):
+            return 0.0
         try:
-            if os.path.exists(self._skills_dir):
-                self._last_skills_mtime = os.path.getmtime(self._skills_dir)
+            max_mtime = os.path.getmtime(self._skills_dir)
+            count = 0
+            for entry in os.listdir(self._skills_dir):
+                if entry.startswith("."):
+                    continue
+                s_dir = os.path.join(self._skills_dir, entry)
+                if os.path.isdir(s_dir):
+                    count += 1
+                    md_path = os.path.join(s_dir, "SKILL.md")
+                    if os.path.exists(md_path):
+                        m = os.path.getmtime(md_path)
+                        if m > max_mtime:
+                            max_mtime = m
+            return round(max_mtime + (count * 1e-6), 6)
         except Exception:
-            pass
+            return 0.0
+
+    def _update_mtime_record(self):
+        self._last_skills_mtime = self._compute_skills_signature()
 
     def reload_skills(self, force: bool = False) -> bool:
         """
-        ~/.agents/skills の更新日時(mtime)を検査し、変更があれば無停止で補完メタデータを再構築
-        force=True の場合は無条件で即時再読込
+        ~/.agents/skills および各 SKILL.md の更新日時(mtime)を検査し、
+        変更があれば無停止で補完メタデータを再構築 (force=True は無条件で即時再読込)
         """
         now = time.time()
         if not force and (now - self._last_skills_check < 0.5):
@@ -224,13 +265,9 @@ class TugumiRichCompleter(Completer):
         should_reload = force
 
         if not should_reload:
-            try:
-                if os.path.exists(self._skills_dir):
-                    curr_mtime = os.path.getmtime(self._skills_dir)
-                    if curr_mtime != self._last_skills_mtime:
-                        should_reload = True
-            except Exception:
-                pass
+            curr_sig = self._compute_skills_signature()
+            if curr_sig != self._last_skills_mtime:
+                should_reload = True
 
         if should_reload:
             self.skills_meta = load_skills_with_descriptions()
@@ -337,4 +374,26 @@ class TugumiRichCompleter(Completer):
                         start_position=-len(sub_word),
                         display=bn_name,
                         display_meta=bn_meta
+                    )
+
+        # G. /sdk または /antigravity
+        elif base_cmd in ("/sdk", "/antigravity"):
+            for sk_name, sk_meta in SDK_META.items():
+                if sk_name.lower().startswith(sub_word):
+                    yield Completion(
+                        text=sk_name,
+                        start_position=-len(sub_word),
+                        display=sk_name,
+                        display_meta=sk_meta
+                    )
+
+        # H. /evolve
+        elif base_cmd == "/evolve":
+            for ev_name, ev_meta in EVOLVE_META.items():
+                if ev_name.lower().startswith(sub_word):
+                    yield Completion(
+                        text=ev_name,
+                        start_position=-len(sub_word),
+                        display=ev_name,
+                        display_meta=ev_meta
                     )

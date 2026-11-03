@@ -21,168 +21,200 @@ def tugumi_context_protocol_engine_2026(
     3. Test-Time Compute (TTC) Dynamic Budgeting:
        - エラーシグナル密度および情報エントロピーに基づく適応型思考予算算出
     4. 2026 Agent Protocol (MCP 2.0 / Google A2A) ヘッダー & ハンドオフメタデータ自動生成
+
+    Args:
+        raw_context (str): 圧縮・アラインメント対象のログ、対話履歴、またはシェル出力。
+        target_token_budget (int): 許容する最大トークン予算（デフォルト: 2048）。
+        page_size (int): KVキャッシュ分割ブロックサイズ（文字数換算、デフォルト: 512）。
+        enable_ttc_scaling (bool): エラー密度に応じたTTC推論予算スケーリングを有効化するか。
+        agent_id (str): 送信元エージェントの識別子。
+        target_protocol (str): 生成するプロトコル規格 ('MCP_2.0' または 'Google_A2A')。
+
+    Returns:
+        dict: 最適化済みコンテキスト、圧縮統計、KVキャッシュハッシュ、TTC思考予算、プロトコルヘッダー。
     """
+    import re
     import hashlib
     import math
-    import re
     import time
-    from typing import Any, Dict, List, Optional
 
     start_time = time.perf_counter()
-    if not raw_context or not raw_context.strip():
-        raw_context = "System ready. TUGUMIv6 Context Protocol Engine active."
 
-    orig_char_len = len(raw_context)
+    if not raw_context:
+        raw_context = (
+            "[INFO] 2026-10-28 20:00:01 System initialized successfully.\n"
+            "[INFO] 2026-10-28 20:00:02 Worker thread spawned.\n"
+            "[INFO] 2026-10-28 20:00:03 Worker thread spawned.\n"
+            "[INFO] 2026-10-28 20:00:04 Worker thread spawned.\n"
+            "\x1b[31;1m[ERROR] ConnectionRefusedError: Failed to connect to port 8080\x1b[0m\n"
+            "Traceback (most recent call last):\n"
+            '  File "/data/data/com.termux/files/home/app.py", line 42, in <module>\n'
+            "    connect_db()\n"
+            '  File "/data/data/com.termux/files/home/db.py", line 12, in connect_db\n'
+            "    raise ConnectionRefusedError('Target port closed')\n"
+            "ConnectionRefusedError: Target port closed\n"
+            "[INFO] 2026-10-28 20:00:05 Retrying connection...\n"
+            "[INFO] 2026-10-28 20:00:06 Retrying connection...\n"
+        )
 
-    # 1. ANSI制御シーケンスの完全除去
-    ansi_cleaner = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    cleaned_context = ansi_cleaner.sub('', raw_context)
+    orig_char_count = len(raw_context)
 
-    # 2. タイムスタンプ差異を吸収した単一行の反復圧縮
-    ts_normalizer = re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?\s*')
-    lines = cleaned_context.splitlines()
-    single_compressed: List[str] = []
-    prev_norm: Optional[str] = None
-    prev_raw: Optional[str] = None
+    # ---------------------------------------------------------
+    # 1. 無劣化意味論的圧縮 (Semantic Lossless Compression)
+    # ---------------------------------------------------------
+    # Step 1-A: ANSIカラーエスケープシーケンスの完全除去
+    ansi_regex = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+    clean_text = ansi_regex.sub('', raw_context)
+
+    # Step 1-B: 行単位のタイムスタンプ正規化と反復行の折りたたみ
+    timestamp_regex = re.compile(
+        r'\b(?:\d{4}[-/]\d{2}[-/]\d{2}[\sT])?\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b'
+    )
+    
+    lines = clean_text.splitlines()
+    compressed_lines = []
+    
+    prev_normalized = None
+    prev_original = None
     repeat_count = 0
+
+    def flush_repeats():
+        nonlocal prev_normalized, prev_original, repeat_count, compressed_lines
+        if prev_original is not None:
+            if repeat_count > 1:
+                compressed_lines.append(f"{prev_original}  [... repeated {repeat_count} times, timestamps elided ...]")
+            else:
+                compressed_lines.append(prev_original)
+        prev_normalized = None
+        prev_original = None
+        repeat_count = 0
 
     for line in lines:
         stripped = line.strip()
-        norm_line = ts_normalizer.sub('<TS> ', stripped)
-        if norm_line and norm_line == prev_norm:
+        if not stripped:
+            flush_repeats()
+            compressed_lines.append("")
+            continue
+
+        normalized_line = timestamp_regex.sub('<TS>', stripped)
+
+        if normalized_line == prev_normalized:
             repeat_count += 1
         else:
-            if prev_raw is not None:
-                if repeat_count > 1:
-                    single_compressed.append(f"{prev_raw} [SimpleMem: repeated x{repeat_count}]")
-                else:
-                    single_compressed.append(prev_raw)
-            prev_raw = line
-            prev_norm = norm_line
+            flush_repeats()
+            prev_normalized = normalized_line
+            prev_original = stripped
             repeat_count = 1
 
-    if prev_raw is not None:
-        if repeat_count > 1:
-            single_compressed.append(f"{prev_raw} [SimpleMem: repeated x{repeat_count}]")
-        else:
-            single_compressed.append(prev_raw)
+    flush_repeats()
+    optimized_text = "\n".join(compressed_lines)
 
-    # 3. 複数行ブロック（スタックトレースや反復構造）の検出と折りたたみ
-    target_lines = single_compressed
-    for block_size in (4, 3, 2):
-        if len(target_lines) < block_size * 2:
-            continue
-        new_lines: List[str] = []
-        idx = 0
-        while idx < len(target_lines):
-            curr_block = target_lines[idx : idx + block_size]
-            if len(curr_block) == block_size and (idx + block_size * 2 <= len(target_lines)):
-                reps = 1
-                while (idx + (reps + 1) * block_size <= len(target_lines) and 
-                       target_lines[idx + reps * block_size : idx + (reps + 1) * block_size] == curr_block):
-                    reps += 1
-                if reps > 1:
-                    new_lines.extend(curr_block)
-                    new_lines.append(f"  └─ [SimpleMem: {block_size}-line block repeated {reps - 1} more times]")
-                    idx += reps * block_size
-                    continue
-            new_lines.append(target_lines[idx])
-            idx += 1
-        target_lines = new_lines
+    # ---------------------------------------------------------
+    # 2. Test-Time Compute (TTC) 思考予算動的算出
+    # ---------------------------------------------------------
+    # エラーシグナル検出
+    error_keywords = [
+        'error', 'exception', 'traceback', 'failed', 'fatal',
+        'refused', 'segfault', 'killed', 'denied', 'syntaxerror',
+        'runtimeerror', 'panic', 'timeout'
+    ]
+    error_hits = sum(len(re.findall(r'\b' + re.escape(kw) + r'\b', optimized_text, re.IGNORECASE)) for kw in error_keywords)
 
-    compressed_body = "\n".join(target_lines)
-    compressed_body = re.sub(r'\n{3,}', '\n\n', compressed_body).strip()
-    opt_char_len = len(compressed_body)
+    # シャノン・エントロピー計算（情報の密度・不確実性の測定）
+    char_freq = {}
+    for c in optimized_text:
+        char_freq[c] = char_freq.get(c, 0) + 1
+    
+    text_len = max(len(optimized_text), 1)
+    entropy = -sum((cnt / text_len) * math.log2(cnt / text_len) for cnt in char_freq.values())
 
-    # 4. Page-based KV Cache Alignment（Prefix Cache用境界分割とフィンガープリント）
-    total_pages = math.ceil(opt_char_len / page_size) if opt_char_len > 0 else 1
-    cache_pages: List[Dict[str, Any]] = []
-    for p_idx in range(total_pages):
-        start_pos = p_idx * page_size
-        end_pos = min(start_pos + page_size, opt_char_len)
-        chunk = compressed_body[start_pos:end_pos]
-        chunk_hash = hashlib.sha256(chunk.encode('utf-8')).hexdigest()[:16]
-        cache_pages.append({
-            "page_index": p_idx,
-            "char_span": [start_pos, end_pos],
-            "sha256_prefix": chunk_hash,
-            "is_aligned": (len(chunk) == page_size)
-        })
-
-    boundary_padding_deficit = (page_size - (opt_char_len % page_size)) % page_size
-
-    # 5. Test-Time Compute (TTC) 思考予算動的算出
-    error_signals = len(re.findall(
-        r'(?i)(error|exception|fail|traceback|panic|fatal|timeout|blocked|denied)',
-        compressed_body
-    ))
-    words = compressed_body.split()
-    entropy = len(set(words)) / max(1, len(words))
-
+    # 動的思考予算（Tokens）の決定
     if not enable_ttc_scaling:
-        ttc_mode = "Deterministic_Fixed"
-        recommended_tokens = target_token_budget
-        reasoning_depth = 1
-    elif error_signals >= 3:
-        ttc_mode = "Deep_Reflective_Search"  # 重大障害時のMCTS型深層思考
-        recommended_tokens = min(4096, target_token_budget * 2)
-        reasoning_depth = 4
-    elif error_signals >= 1 or entropy > 0.65:
-        ttc_mode = "Standard_Verification"   # コード修正・通常検証
-        recommended_tokens = min(2048, target_token_budget)
-        reasoning_depth = 2
+        ttc_mode = "STATIC"
+        recommended_thinking_budget = min(target_token_budget // 2, 1024)
     else:
-        ttc_mode = "Direct_Execution"        # 確定タスク向け即時応答
-        recommended_tokens = 512
-        reasoning_depth = 1
+        # エラー数とエントロピーによる動的スケーリング
+        if error_hits >= 3 or entropy > 5.5:
+            ttc_mode = "CRITICAL_DEBUG"
+            recommended_thinking_budget = min(target_token_budget, 4096)
+        elif error_hits >= 1 or entropy > 4.5:
+            ttc_mode = "ADAPTIVE_REASONING"
+            recommended_thinking_budget = min(target_token_budget // 2, 2048)
+        else:
+            ttc_mode = "FAST_PATH"
+            recommended_thinking_budget = min(target_token_budget // 4, 512)
 
-    # 6. 2026 Agent Protocol Header / Handoff Payload 生成
-    session_nonce = hashlib.md5(f"{agent_id}-{time.time()}".encode()).hexdigest()[:12]
-    if target_protocol.upper() == "A2A":
-        protocol_meta = {
-            "protocol": "Google_A2A_v1.2",
-            "source_agent": agent_id,
-            "handoff_context_id": f"ctx-a2a-{session_nonce}",
-            "interaction_pattern": "hierarchical_delegation",
-            "context_ttl_seconds": 3600
+    # ---------------------------------------------------------
+    # 3. Page-based KV Cache Alignment (Prefix Caching)
+    # ---------------------------------------------------------
+    pages = []
+    page_hashes = []
+    
+    # ページサイズごとの均等チャンク分割
+    for idx in range(0, len(optimized_text), page_size):
+        chunk = optimized_text[idx:idx + page_size]
+        chunk_hash = hashlib.sha256(chunk.encode('utf-8')).hexdigest()[:16]
+        pages.append({
+            "page_index": len(pages),
+            "char_length": len(chunk),
+            "sha256_prefix": chunk_hash
+        })
+        page_hashes.append(chunk_hash)
+
+    # プレフィックス全体の整合性フィンガープリント
+    prefix_fingerprint = hashlib.sha256("".join(page_hashes).encode('utf-8')).hexdigest()[:24]
+
+    # ---------------------------------------------------------
+    # 4. 2026 Agent Protocol (MCP 2.0 / A2A) メタデータ生成
+    # ---------------------------------------------------------
+    if target_protocol.upper() == "MCP_2.0":
+        protocol_headers = {
+            "protocol_spec": "MCP-2.0-2026",
+            "session_type": "stateful_context_session",
+            "X-MCP-Sender": agent_id,
+            "X-MCP-Context-Fingerprint": prefix_fingerprint,
+            "X-MCP-Page-Count": len(pages),
+            "X-MCP-TTC-Mode": ttc_mode,
+            "X-MCP-TTC-Budget": recommended_thinking_budget,
+            "X-MCP-Handoff-Ready": True if error_hits > 0 else False
         }
-    else:
-        protocol_meta = {
-            "protocol": "MCP_2.0_2026-07-28",
-            "stateless_session_id": f"mcp-stateless-{session_nonce}",
-            "transport_capabilities": ["stdio", "streamable_http", "tasks_ext"],
-            "supports_multi_round_trip": True,
-            "tasks_extension_ready": True
+    else:  # Google_A2A
+        protocol_headers = {
+            "protocol_spec": "Google-A2A-v2",
+            "topology": "hierarchical_contract_delegation",
+            "A2A-Initiator": agent_id,
+            "A2A-Verification-Required": True,
+            "A2A-Compute-Tier": ttc_mode,
+            "A2A-Allocated-Tokens": recommended_thinking_budget,
+            "A2A-KV-Hash": prefix_fingerprint
         }
 
-    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-    reduction_ratio = round((1.0 - (opt_char_len / max(1, orig_char_len))) * 100, 2)
-    est_tokens_saved = max(0, int((orig_char_len - opt_char_len) / 3.8))
+    exec_time_ms = (time.perf_counter() - start_time) * 1000
+    comp_char_count = len(optimized_text)
+    reduction_pct = round((1.0 - (comp_char_count / max(orig_char_count, 1))) * 100, 2)
 
     return {
         "status": "success",
-        "engine": "TUGUMI-ContextProtocolEngine-2026",
-        "platform": "Android-Termux-aarch64",
-        "protocol_handshake": protocol_meta,
-        "compression_metrics": {
-            "original_chars": orig_char_len,
-            "optimized_chars": opt_char_len,
-            "reduction_pct": reduction_ratio,
-            "est_tokens_saved": est_tokens_saved,
-            "latency_ms": elapsed_ms
+        "protocol": target_protocol,
+        "execution_time_ms": round(exec_time_ms, 3),
+        "metrics": {
+            "original_characters": orig_char_count,
+            "compressed_characters": comp_char_count,
+            "reduction_percentage": f"{reduction_pct}%",
+            "error_signal_count": error_hits,
+            "shannon_entropy": round(entropy, 3)
+        },
+        "ttc_compute_budget": {
+            "mode": ttc_mode,
+            "recommended_thinking_tokens": recommended_thinking_budget,
+            "reasoning": f"Detected {error_hits} error signals with entropy {round(entropy, 2)}."
         },
         "kv_cache_alignment": {
-            "page_size": page_size,
-            "total_pages": len(cache_pages),
-            "padding_chars_needed": boundary_padding_deficit,
-            "page_fingerprints": [p["sha256_prefix"] for p in cache_pages[:6]]
+            "page_size_chars": page_size,
+            "total_pages": len(pages),
+            "prefix_fingerprint": prefix_fingerprint,
+            "page_manifest": pages
         },
-        "test_time_compute": {
-            "mode": ttc_mode,
-            "recommended_budget_tokens": recommended_tokens,
-            "reasoning_depth": reasoning_depth,
-            "error_signals_detected": error_signals,
-            "lexical_entropy": round(entropy, 3)
-        },
-        "optimized_context": compressed_body
+        "protocol_headers": protocol_headers,
+        "optimized_context": optimized_text
     }

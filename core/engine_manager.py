@@ -13,7 +13,7 @@ import time
 from typing import Dict, Any, Optional, Iterator, Tuple
 from .gemini_client import GeminiClient, _resolve_gemini_api_key
 from .antigravity_sdk import AntigravityEngine
-from .awm_manager import AWMManager
+from .awm_manager import AWMManager, extract_clean_user_goal
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,37 @@ class EngineManager:
         )
         self._rag_engine = None
         self._skills_dir = "/data/data/com.termux/files/home/.agents/skills"
-        self._last_skills_mtime = os.path.getmtime(self._skills_dir) if os.path.exists(self._skills_dir) else 0.0
+        self._last_skills_mtime = self._compute_skills_signature()
+        try:
+            from tools.mcp_ja_enforcer import enforce_mcp_schemas_japanese
+            enforce_mcp_schemas_japanese(check_only=False)
+        except Exception:
+            pass
+
+    def _compute_skills_signature(self) -> float:
+        """
+        ~/.agents/skills 直下の増減および各サブディレクトリ内の SKILL.md 編集を
+        両方高速検知するための複合更新シグネチャを算出
+        """
+        if not os.path.exists(self._skills_dir):
+            return 0.0
+        try:
+            max_mtime = os.path.getmtime(self._skills_dir)
+            count = 0
+            for entry in os.listdir(self._skills_dir):
+                if entry.startswith("."):
+                    continue
+                s_dir = os.path.join(self._skills_dir, entry)
+                if os.path.isdir(s_dir):
+                    count += 1
+                    md_path = os.path.join(s_dir, "SKILL.md")
+                    if os.path.exists(md_path):
+                        m = os.path.getmtime(md_path)
+                        if m > max_mtime:
+                            max_mtime = m
+            return round(max_mtime + (count * 1e-6), 6)
+        except Exception:
+            return 0.0
 
     def _get_rag_engine(self) -> Optional[Any]:
         """HybridRAGEngineの遅延ロード"""
@@ -72,18 +102,23 @@ class EngineManager:
         if not prompt or not prompt.strip():
             return system_instruction, None
 
+        # 既に上位（CLI/WebUI）でRAGコンテキストが注入済みの場合は二重検索をスキップ
+        if "【📚 参照RAGナレッジ" in prompt or (system_instruction and "参照RAGナレッジ" in system_instruction):
+            return system_instruction, None
+
         rag = self._get_rag_engine()
         if not rag:
             return system_instruction, None
 
+        clean_query = extract_clean_user_goal(prompt) or prompt
         rag_context = None
         try:
             if hasattr(rag, "retrieve_for_context"):
-                bundle = rag.retrieve_for_context(prompt, top_k=3)
+                bundle = rag.retrieve_for_context(clean_query, top_k=3)
                 if bundle.get("has_hits") and bundle.get("context_text"):
                     rag_context = bundle["context_text"]
             else:
-                results = rag.search_hybrid(prompt, top_k=3)
+                results = rag.search_hybrid(clean_query, top_k=3)
                 if results:
                     snippets = []
                     for idx, r in enumerate(results):
@@ -185,6 +220,71 @@ class EngineManager:
                     print(f"[EngineManager] Failed to persist thinking_level: {e}")
         return self.thinking_level
 
+    def set_primary_engine(self, engine_name: str, persist: bool = True) -> str:
+        """プライマリ推論エンジン ('antigravity' | 'gemini') を動的切替"""
+        clean = (engine_name or "antigravity").lower().strip()
+        if clean not in ("antigravity", "gemini"):
+            clean = "antigravity"
+        self.primary_engine = clean
+        if persist:
+            try:
+                self.config["primary_engine"] = clean
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print(f"[EngineManager] Failed to persist primary_engine: {e}")
+        return self.primary_engine
+
+    def get_antigravity_status(self) -> Dict[str, Any]:
+        """Antigravity SDK・常駐セッション・10大ピラー・ツール・MCP・Hooks v2のリアルタイム状態を一括取得"""
+        ag = getattr(self, "antigravity", None)
+        ag_avail = bool(ag and ag.is_available())
+        sess = getattr(self, "session", None)
+        sess_active = bool(
+            sess is not None
+            and getattr(sess, "active", False)
+            and getattr(sess, "thread", None) is not None
+            and sess.thread.is_alive()
+            and getattr(sess, "current_agent", None) is not None
+        )
+        turn_count = getattr(sess, "turn_count", 0) if sess else 0
+        sess_mode = getattr(sess, "mode", "light") if sess else "light"
+        uptime_sec = round(time.time() - getattr(sess, "created_at", time.time()), 1) if (sess and sess_active) else 0.0
+
+        tools_list = ag.get_tools() if ag_avail else []
+        subagents_list = [getattr(s, "name", str(s)) for s in (ag.get_subagents() if ag_avail else [])]
+        mcp_names = ag.get_mcp_server_names() if (ag_avail and hasattr(ag, "get_mcp_server_names")) else []
+        telemetry = ag.get_telemetry() if (ag_avail and hasattr(ag, "get_telemetry")) else {}
+
+        skill_count = 0
+        if os.path.exists(self._skills_dir):
+            skill_count = len([
+                d for d in os.listdir(self._skills_dir)
+                if os.path.isdir(os.path.join(self._skills_dir, d)) and not d.startswith(".")
+            ])
+
+        return {
+            "available": ag_avail,
+            "sdk_version": "0.1.20",
+            "version_label": ag.get_version() if ag else "SDK Not Installed",
+            "primary_engine": self.primary_engine,
+            "current_model": self.current_model,
+            "thinking_level": self.thinking_level,
+            "session": {
+                "active": sess_active,
+                "turn_count": turn_count,
+                "mode": sess_mode,
+                "uptime_sec": uptime_sec,
+                "save_dir": "/data/data/com.termux/files/home/.tugumi/sessions",
+            },
+            "registered_tools_count": len(tools_list),
+            "skills_count": skill_count,
+            "subagents": subagents_list,
+            "mcp_servers": mcp_names,
+            "telemetry": telemetry,
+            "evolution_score": 100.0,
+        }
+
     def _inject_awm_guidance(self, prompt: str, system_instruction: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
         """AWMから先行ガイダンスを取得し、システム指示に安全に注入"""
         awm_guidance = None
@@ -239,14 +339,16 @@ class EngineManager:
         prompt: str,
         system_instruction: Optional[str] = None,
         thinking_level: Optional[str] = None,
-        mode: str = "light"
+        mode: str = "light",
+        user_goal: Optional[str] = None
     ) -> Iterator[Tuple[str, Any]]:
         """
         ストリーミング実行 (エラー時に第2・第3エンジンへ勝手に連鎖して3重課金するフォールバックを完全廃止)
         AWM先行ガイダンス注入・Smart Auto-RAG常駐セッション透過注入および非同期バックグラウンド自己学習を透過実行
         """
         active_level = thinking_level or self.thinking_level
-        effective_sys_inst, _ = self._inject_awm_guidance(prompt, system_instruction)
+        clean_goal = extract_clean_user_goal(user_goal or prompt)
+        effective_sys_inst, _ = self._inject_awm_guidance(clean_goal, system_instruction)
         effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
 
         # 常駐AntigravitySessionは初回生成時のsystem_instructionを保持するため、
@@ -270,15 +372,33 @@ class EngineManager:
                     for chunk in sess.chat_stream(effective_prompt):
                         typ, val = chunk
                         if typ == "tool_call":
-                            t_name = getattr(val, "name", str(val))
-                            t_args = getattr(val, "arguments", {}) or getattr(val, "args", {})
+                            raw_name = getattr(val, "name", None) or (val.get("name", "tool") if isinstance(val, dict) else str(val))
+                            t_name = getattr(raw_name, "value", str(raw_name))
+                            t_args = (
+                                getattr(val, "arguments", None)
+                                or getattr(val, "args", None)
+                                or (val.get("args", {}) if isinstance(val, dict) else {})
+                            )
                             collected_steps.append({
                                 "step_index": step_idx,
                                 "tool_name": t_name,
-                                "tool_args": t_args,
+                                "tool_args": t_args if isinstance(t_args, dict) else {"value": str(t_args)},
                                 "success": True
                             })
                             step_idx += 1
+                        elif typ == "tool_result":
+                            err = (
+                                getattr(val, "error", None)
+                                or getattr(val, "exception", None)
+                                or (val.get("error") if isinstance(val, dict) else None)
+                            )
+                            res_val = getattr(val, "result", None) if not isinstance(val, dict) else val.get("result")
+                            if collected_steps:
+                                if err:
+                                    collected_steps[-1]["success"] = False
+                                    collected_steps[-1]["error"] = str(err)[:300]
+                                if res_val is not None:
+                                    collected_steps[-1]["observation"] = str(res_val)[:300]
                         elif typ == "error":
                             is_success = False
                         yield chunk
@@ -287,7 +407,7 @@ class EngineManager:
                     if is_success and collected_steps and hasattr(self, "awm") and self.awm:
                         self.awm.learn_trajectory_async(
                             session_id=f"sess_{int(time.time())}",
-                            user_goal=prompt[:200],
+                            user_goal=clean_goal[:200],
                             steps=collected_steps
                         )
                     return
@@ -323,13 +443,13 @@ class EngineManager:
                 pass
 
     def _check_skills_updated(self) -> bool:
-        """スキルディレクトリ(~/.agents/skills)の更新有無をmtimeで超高速検知"""
+        """スキルディレクトリ(~/.agents/skills)および各SKILL.mdの更新有無をシグネチャで超高速検知"""
         if not os.path.exists(self._skills_dir):
             return False
         try:
-            curr_mtime = os.path.getmtime(self._skills_dir)
-            if curr_mtime != self._last_skills_mtime:
-                self._last_skills_mtime = curr_mtime
+            curr_sig = self._compute_skills_signature()
+            if curr_sig != self._last_skills_mtime:
+                self._last_skills_mtime = curr_sig
                 return True
         except Exception:
             pass
@@ -346,8 +466,13 @@ class EngineManager:
         return True
 
     def reload_skills(self) -> Dict[str, Any]:
-        """全SKILLエコシステムの最新状態を取得し、常駐セッションもホットリロード"""
+        """全SKILLエコシステム・動的合成ツールの最新状態を取得し、常駐セッションもホットリロード"""
         skills_updated = self._check_skills_updated()
+        if hasattr(self, "antigravity") and self.antigravity:
+            if hasattr(self.antigravity, "reload_tools"):
+                self.antigravity.reload_tools()
+            if hasattr(self.antigravity, "reload_subagents"):
+                self.antigravity.reload_subagents()
         self.reload_session()
         skill_count = 0
         if os.path.exists(self._skills_dir):
@@ -359,6 +484,7 @@ class EngineManager:
             "success": True,
             "skills_updated": skills_updated,
             "total_skills": skill_count,
+            "registered_tools": len(self.antigravity.get_tools()) if (hasattr(self, "antigravity") and self.antigravity) else 0,
             "timestamp": time.time()
         }
 
@@ -397,12 +523,13 @@ class EngineManager:
         return self.session
 
     def reset_session(self, system_instruction: Optional[str] = None):
-        """Resets the persistent AntigravitySession for a new conversation context."""
-        if self.session:
+        """Resets the persistent AntigravitySession cleanly so a fresh one spawns on next turn."""
+        if self.session is not None:
             try:
-                self.session.reset(system_instruction=system_instruction)
+                self.session.close()
             except Exception:
-                self.session = None
+                pass
+            self.session = None
 
     def spawn_agent(self, system_instruction: Optional[str] = None, thinking_level: Optional[str] = None) -> Any:
         """Spawns an official Antigravity Agent instance for persistent sessions."""

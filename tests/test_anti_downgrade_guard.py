@@ -113,4 +113,89 @@ def test_tugumi_v6_core_functions_not_restricted_by_binance():
         assert f'"name": "{live_tool}"' in web_src, f"【規約違反】Gemini Live API から基本ツール '{live_tool}' が欠落しています！"
 
 
+def test_skill_ecosystem_full_coverage_and_contract_integrity():
+    """SKILLエコシステムが正本(~/.agents/skills)から全数認識され、UIデータ契約(has_tools等)を満たすことを検証"""
+    from core.capability_inspector import SkillInspector
+    insp = SkillInspector()
+    skills = insp.list_skills()
+    
+    # 1. 認識SKILL数が正本(>=60件)であること(足切り・探索漏れ排除)
+    assert len(skills) >= 60, f"【規約違反】認識SKILL数が {len(skills)}件 に激減しています！正本(~/.agents/skills)をスキャンしてください。"
+    
+    # 2. UIデータ契約: 全SKILL辞書に has_tools, has_scripts, category が存在し、boolであること
+    for s in skills:
+        assert "has_tools" in s, f"【データ契約違反】SKILL '{s.get('name')}' に has_tools キーが存在しません！"
+        assert isinstance(s["has_tools"], bool), f"has_tools は bool である必要があります (got {type(s['has_tools'])})"
+        assert "has_scripts" in s, f"【データ契約違反】SKILL '{s.get('name')}' に has_scripts キーが存在しません！"
+        assert isinstance(s["has_scripts"], bool)
+        assert bool(s.get("category")), f"SKILL '{s.get('name')}' のカテゴリが空です"
+
+
+def test_webui_resume_dock_and_session_isolation_contract():
+    """WebUI の再開ドック(#resumeDock)とセッション分離・緊急停止トグルが実装されていることを検証"""
+    tpl_path = Path("/data/data/com.termux/files/home/TUGUMIv6/interfaces/web/templates/index.html")
+    tpl_src = tpl_path.read_text(encoding="utf-8")
+    
+    # 1. 再開ドックとセッション分離ハンドラが存在すること
+    assert 'id="resumeDock"' in tpl_src, "【UI欠陥回帰】index.html に #resumeDock が存在しません！"
+    assert "checkResumeDockForCurrentSession" in tpl_src, "【セッション汚染回帰】checkResumeDockForCurrentSession が存在しません！"
+    assert "resumeInterruptedTask" in tpl_src
+    assert "dismissInterruptedTask" in tpl_src
+    
+    # 2. 緊急停止トグルボタンが配備されていること
+    assert "toggleEmergencyStop" in tpl_src, "【UI欠陥回帰】toggleEmergencyStop が存在しません！"
+
+
+def test_mcp_descriptions_japanese_immutability():
+    """全MCPツール説明文の完全日本語表記および不可侵・永続化を検証（英語への先祖返りを物理遮断）"""
+    from tools.mcp_ja_enforcer import enforce_mcp_schemas_japanese, verify_source_mcp_files_japanese
+    from core.capability_inspector import MCP_TOOL_JA_DESCRIPTIONS
+
+    # 1. 登録辞書が十分な網羅性を持っていること
+    assert len(MCP_TOOL_JA_DESCRIPTIONS) >= 80, (
+        f"【規約違反】MCP_TOOL_JA_DESCRIPTIONS の登録件数が激減しています！ (現行: {len(MCP_TOOL_JA_DESCRIPTIONS)}件)"
+    )
+
+    # 2. 全スキーマJSONファイルの説明文が日本語であること（英語に戻っていないこと）
+    total, updated, issues = enforce_mcp_schemas_japanese(check_only=True)
+    assert total >= 80, f"【規約違反】検査対象スキーマ数が不足しています (現行: {total}件)"
+    assert len(issues) == 0, f"【先祖返り検知】以下のMCPスキーマが英語または異なる説明文に戻っています: {issues}"
+
+    # 3. 主要MCPサーバーのソースコードdocstringが日本語であること
+    src_issues = verify_source_mcp_files_japanese()
+    assert len(src_issues) == 0, f"【先祖返り検知】MCPソースコードのdocstringが改竄・巻き戻っています: {src_issues}"
+
+
+def test_sdk_10_pillars_hooks_and_mcp2_stateless_tools_guard():
+    """Antigravity SDK 10大進化ピラー・Hooks v2・MCP 2.0 ステートレス拡張ツール5種の常時登録を検証"""
+    from tools.antigravity_tools import get_tugumi_tools
+    from core.engine_manager import EngineManager
+
+    tools = get_tugumi_tools()
+    tool_names = {getattr(t, "__name__", "") for t in tools}
+
+    # 1. MCP 2.0 (2026-07-28) Stateless / Tasks / Apps 拡張ツール5種が漏れなく登録されていること
+    required_mcp2_tools = {
+        "mcp2_start_task",
+        "mcp2_task_status",
+        "mcp2_task_cancel",
+        "mcp2_render_app",
+        "mcp2_protocol_info",
+    }
+    missing = required_mcp2_tools - tool_names
+    assert not missing, f"【規約違反】MCP 2.0 拡張ツールが get_tugumi_tools() から漏れています: {missing}"
+    assert len(tools) >= 58, f"【規約違反】ネイティブ登録ツール数が減少しています (現行: {len(tools)}種)"
+
+    # 2. AntigravityEngine に Hooks v2・ホットリロード・テレメトリAPIが実装されていること
+    for attr in ("get_telemetry", "reload_tools", "reload_subagents", "get_mcp_server_names", "registered_tools"):
+        assert hasattr(AntigravityEngine, attr), f"【規約違反】AntigravityEngine.{attr} が欠落しています！"
+
+    # 3. EngineManager に set_primary_engine と get_antigravity_status が実装されていること
+    for attr in ("set_primary_engine", "get_antigravity_status"):
+        assert hasattr(EngineManager, attr), f"【規約違反】EngineManager.{attr} が欠落しています！"
+
+
+
+
+
 

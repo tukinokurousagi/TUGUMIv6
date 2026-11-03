@@ -6,7 +6,6 @@ Tests all endpoints, streaming, tools, background jobs, kill-switches, and memor
 import sys
 import os
 import unittest
-import json
 
 # Ensure TUGUMIv6 root is in sys.path
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -315,16 +314,35 @@ class TestWebUIFullE2E(unittest.TestCase):
         assert d_ag["success"] is True
         assert d_ag["evolution_score"] == 100.0
         assert len(d_ag["pillars"]) == 10
+        assert d_ag["registered_tools_count"] >= 30
+        assert len(d_ag["mcp_servers"]) >= 10
+
+        r_eng = self.client.post("/api/antigravity/engine", json={"primary": "antigravity"})
+        assert r_eng.status_code == 200
+        assert r_eng.json()["success"] is True
+        assert r_eng.json()["primary_engine"] == "antigravity"
+
+        r_rst = self.client.post("/api/antigravity/reset_session")
+        assert r_rst.status_code == 200
+        assert r_rst.json()["success"] is True
+
+        r_evo = self.client.post("/api/antigravity/evolve_check")
+        assert r_evo.status_code == 200
+        d_evo = r_evo.json()
+        assert d_evo["success"] is True
+        assert d_evo.get("verification", {}).get("all_passed") is True
+        assert "10大進化ピラー" in d_evo.get("markdown", "")
 
         r_can = self.client.post("/api/chat/cancel")
         assert r_can.status_code == 200
         assert r_can.json()["success"] is True
 
-        for cmd in ["/evolve", "/compact", "/session"]:
+        for cmd in ["/evolve", "/sdk", "/sdk spec", "/sdk tools", "/compact", "/session", "/session reset"]:
             r_cmd = self.client.post("/api/chat", json={"message": cmd, "mode": "light", "session_id": "test_ag_sdk"})
             assert r_cmd.status_code == 200
             rep = r_cmd.json()["reply"]
             assert "|---" not in rep
+            assert "診断エラー" not in rep
 
     def test_16_user_first_innovations_and_zero_mock_wiring(self):
         """16. Omni Command Palette, Live Artifact Canvas, Smart Desk Archiver, FPF, Recall & Graph E2E検証"""

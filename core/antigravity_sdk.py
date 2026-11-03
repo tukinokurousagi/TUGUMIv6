@@ -8,6 +8,7 @@ TUGUMIv6 Antigravity SDK Core Driver
 """
 
 import os
+import time
 import asyncio
 import queue
 import threading
@@ -51,12 +52,33 @@ try:
     from google.antigravity import hooks as agy_hooks
     from google.antigravity.hooks import policy
 
+    _SDK_TELEMETRY: Dict[str, Any] = {
+        "tool_calls": 0,
+        "tool_errors_recovered": 0,
+        "compactions": 0,
+        "last_tool": None,
+        "last_error": None,
+    }
+
     @agy_hooks.on_tool_error
     async def _tugumi_on_tool_error_hook(err: Exception) -> str:
+        _SDK_TELEMETRY["tool_errors_recovered"] = _SDK_TELEMETRY.get("tool_errors_recovered", 0) + 1
+        _SDK_TELEMETRY["last_error"] = f"{type(err).__name__}: {err}"
         return (
             f"[Antigravity Native Hook - Tool Error: {type(err).__name__}] {err}\n"
             "第一原理に基づき、引数・パス・環境状態を確認して別手段または修正パラメータで再試行してください。"
         )
+
+    @agy_hooks.post_tool_call
+    async def _tugumi_post_tool_call_hook(result: Any) -> None:
+        _SDK_TELEMETRY["tool_calls"] = _SDK_TELEMETRY.get("tool_calls", 0) + 1
+        t_name = getattr(result, "name", None)
+        if t_name:
+            _SDK_TELEMETRY["last_tool"] = str(t_name)
+
+    @agy_hooks.on_compaction
+    async def _tugumi_on_compaction_hook(step: Any) -> None:
+        _SDK_TELEMETRY["compactions"] = _SDK_TELEMETRY.get("compactions", 0) + 1
 
     ANTIGRAVITY_AVAILABLE = True
 except ImportError:
@@ -71,7 +93,16 @@ except ImportError:
     ToolOutputTruncationConfig = None
     GeminiModelOptions = None
     agy_hooks = None
+    _SDK_TELEMETRY = {
+        "tool_calls": 0,
+        "tool_errors_recovered": 0,
+        "compactions": 0,
+        "last_tool": None,
+        "last_error": None,
+    }
     _tugumi_on_tool_error_hook = None
+    _tugumi_post_tool_call_hook = None
+    _tugumi_on_compaction_hook = None
     policy = None
 
 from core.subagents import get_tugumi_subagents
@@ -142,11 +173,38 @@ class AntigravityEngine:
                 self._tools = []
         return self._tools
 
+    @property
+    def registered_tools(self) -> list:
+        """Returns currently registered tools list (alias for get_tools)."""
+        return self.get_tools()
+
+    def reload_tools(self) -> list:
+        """Clears cached tools and reloads all static + dynamically synthesized tools."""
+        self._tools = None
+        return self.get_tools()
+
     def get_subagents(self) -> list:
         """Returns the list of subagents, lazily loading them on demand."""
         if self._subagents is None:
             self._subagents = get_tugumi_subagents() if self.available else []
         return self._subagents
+
+    def reload_subagents(self) -> list:
+        """Clears cached subagents and reloads them."""
+        self._subagents = None
+        return self.get_subagents()
+
+    def get_mcp_server_names(self) -> List[str]:
+        """Returns the names of all configured MCP 2.0 servers."""
+        try:
+            servers = self._resolve_dynamic_mcp_servers()
+            return [getattr(s, "name", str(s)) for s in servers]
+        except Exception:
+            return []
+
+    def get_telemetry(self) -> Dict[str, Any]:
+        """Returns live Hooks v2 telemetry counters."""
+        return dict(_SDK_TELEMETRY)
 
     def build_config(
         self,
@@ -193,11 +251,19 @@ class AntigravityEngine:
         capabilities = CapabilitiesConfig(
             enable_subagents=True,
             allowed_subagents=allowed_names,
+            max_subagent_depth=2,
             tool_output_truncation_config=truncation_cfg
         )
 
         policies = [policy.allow_all()] if (allow_all_tools and policy) else None
-        active_hooks = [_tugumi_on_tool_error_hook] if _tugumi_on_tool_error_hook else None
+        active_hooks = [
+            h for h in (
+                _tugumi_on_tool_error_hook,
+                _tugumi_post_tool_call_hook,
+                _tugumi_on_compaction_hook,
+            )
+            if h is not None
+        ] or None
 
         compaction_cfg = CompactionConfig(token_threshold=150000) if CompactionConfig else None
         retry_cfg = (
@@ -206,6 +272,7 @@ class AntigravityEngine:
                     max_retries=1,
                     initial_sleep_duration_ms=1000,
                     exponential_multiplier=2.0,
+                    jitter_range=0.2,
                 ),
                 model_output_retry=ModelOutputRetryConfig(max_retries=1),
             )
@@ -344,6 +411,30 @@ class AntigravityEngine:
                 headers={
                     "Mcp-Protocol-Version": "2026-07-28",
                     "User-Agent": "TUGUMIv6-MCP2/6.2.0 (Android-Termux)"
+                }
+            ))
+
+        # 11. TUGUMI v6 Native MCP Server
+        tugumi_path = "/data/data/com.termux/files/home/.mcp/tugumi_v6_mcp.py"
+        if os.path.exists(tugumi_path):
+            servers.append(McpStdioServer(
+                name="tugumi_v6",
+                command="python3",
+                args=[tugumi_path]
+            ))
+
+        # 12. Metasploit Framework MCP
+        msf_path = "/data/data/com.termux/files/home/metasploitmcp/start_msf_mcp.sh"
+        if os.path.exists(msf_path):
+            servers.append(McpStdioServer(
+                name="metasploit",
+                command="bash",
+                args=[msf_path],
+                env={
+                    "MSF_HOST": "127.0.0.1",
+                    "MSF_PORT": "55553",
+                    "MSF_PASSWORD": "tugumi_genius",
+                    "MSF_SSL": "false"
                 }
             ))
 
@@ -543,6 +634,10 @@ class AntigravityEngine:
             mode=mode
         )
 
+    def reset_session(self) -> bool:
+        """Defensive compatibility hook for legacy callers."""
+        return True
+
 
 class AntigravitySession:
     """Persistent Multi-Turn Session for Antigravity Agent.
@@ -568,6 +663,8 @@ class AntigravitySession:
         self.current_agent = None
         self.current_task = None
         self.current_out_q = None
+        self.turn_count = 0
+        self.created_at = time.time()
         self._cancel_requested = threading.Event()
         self._start_worker()
 
@@ -599,12 +696,43 @@ class AntigravitySession:
                             break
                         prompt, out_sync_q = req
                         self.current_out_q = out_sync_q
+                        self.turn_count += 1
                         self._cancel_requested.clear()
 
                         async def _execute(prompt=prompt, out_sync_q=out_sync_q):
+                            waiting_tool_execution = False
+                            last_tool_call_name = ""
                             try:
-                                resp = await agent.chat(prompt)
-                                async for chunk in resp.chunks:
+                                # 初回レスポンス到達タイムアウト（120秒）で永久ハングを物理遮断
+                                resp = await asyncio.wait_for(agent.chat(prompt), timeout=120.0)
+                                chunk_iter = resp.chunks.__aiter__()
+                                while True:
+                                    if self._cancel_requested.is_set():
+                                        try:
+                                            await agent.conversation.cancel()
+                                        except Exception:
+                                            pass
+                                        out_sync_q.put(("cancelled", "Task cancelled"))
+                                        break
+                                    try:
+                                        # ツール実行中はツールの実行完了を待つため360秒、通常チャンク間は180秒
+                                        curr_timeout = 360.0 if waiting_tool_execution else 180.0
+                                        chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=curr_timeout)
+                                    except StopAsyncIteration:
+                                        break
+                                    except asyncio.TimeoutError:
+                                        try:
+                                            await agent.conversation.cancel()
+                                        except Exception:
+                                            pass
+                                        err_msg = (
+                                            f"ツール実行タイムアウト (360秒待機超過: 直前ツール '{last_tool_call_name or '不明'}') - プロセスのハングまたは長期実行を安全遮断しました"
+                                            if waiting_tool_execution
+                                            else "ストリーミングチャンク受信タイムアウト (180秒無通信検知)"
+                                        )
+                                        out_sync_q.put(("error", err_msg))
+                                        break
+
                                     if self._cancel_requested.is_set():
                                         try:
                                             await agent.conversation.cancel()
@@ -617,9 +745,18 @@ class AntigravitySession:
                                     elif isinstance(chunk, agy_types.Text):
                                         out_sync_q.put(("text", chunk.text))
                                     elif isinstance(chunk, agy_types.ToolCall):
+                                        waiting_tool_execution = True
+                                        last_tool_call_name = getattr(chunk, "name", "tool")
                                         out_sync_q.put(("tool_call", chunk))
                                     elif isinstance(chunk, agy_types.ToolResult):
+                                        waiting_tool_execution = False
                                         out_sync_q.put(("tool_result", chunk))
+                            except asyncio.TimeoutError:
+                                try:
+                                    await agent.conversation.cancel()
+                                except Exception:
+                                    pass
+                                out_sync_q.put(("error", "API接続・初回レスポンス待機タイムアウト (120秒無応答ハング検知)"))
                             except asyncio.CancelledError:
                                 try:
                                     await agent.conversation.cancel()
@@ -634,11 +771,13 @@ class AntigravitySession:
                         self.current_task = asyncio.create_task(_execute())
                         try:
                             await self.current_task
-                        except asyncio.CancelledError:
+                        except (asyncio.CancelledError, Exception):
                             pass
                         finally:
                             self.current_task = None
                             self.current_out_q = None
+            except asyncio.CancelledError:
+                self.ready_event.set()
             except Exception as e:
                 self.ready_event.set()
                 print(f"[AntigravitySession] Worker error: {e}")
@@ -647,9 +786,28 @@ class AntigravitySession:
 
         try:
             self.loop.run_until_complete(_main())
+        except (Exception, asyncio.CancelledError):
+            pass
         finally:
-            if self.loop and not self.loop.is_closed():
-                self.loop.close()
+            try:
+                # 未完了タスクの全キャンセルと完了待機
+                pending = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                # 非同期ジェネレータのシャットダウン
+                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+                if hasattr(self.loop, "shutdown_default_executor"):
+                    self.loop.run_until_complete(self.loop.shutdown_default_executor())
+            except (Exception, asyncio.CancelledError):
+                pass
+            finally:
+                try:
+                    if self.loop and not self.loop.is_closed() and not self.loop.is_running():
+                        self.loop.close()
+                except (Exception, asyncio.CancelledError):
+                    pass
 
     def cancel(self):
         """Cancels the currently running agent turn safely and unblocks receivers."""
@@ -672,6 +830,12 @@ class AntigravitySession:
                     pass
         if self.current_out_q:
             try:
+                # キューに残った古いチャンクを全て破棄して混入防止
+                while not self.current_out_q.empty():
+                    try:
+                        self.current_out_q.get_nowait()
+                    except Exception:
+                        break
                 self.current_out_q.put_nowait(("cancelled", "Task cancelled"))
                 self.current_out_q.put_nowait(("done", None))
             except Exception:
@@ -686,16 +850,28 @@ class AntigravitySession:
         out_sync_q = queue.Queue()
         self.current_out_q = out_sync_q
         self.loop.call_soon_threadsafe(self.async_in_q.put_nowait, (prompt, out_sync_q))
+        start_stream_time = time.time()
+        last_chunk_time = start_stream_time
         try:
             while True:
+                if self._cancel_requested.is_set():
+                    yield ("cancelled", "Task cancelled")
+                    break
                 try:
-                    chunk_type, data = out_sync_q.get(timeout=0.5)
+                    chunk_type, data = out_sync_q.get(timeout=0.1)
                 except queue.Empty:
                     if not self.active or not self.thread or not self.thread.is_alive():
                         yield ("error", "Antigravity background worker died unexpectedly")
                         break
+                    # 定期パルス（tick）を上位に返し、タイマー更新およびESCキー捕捉をリアルタイム化
+                    now = time.time()
+                    if now - last_chunk_time > 400.0:
+                        yield ("error", "Antigravity推論全体タイムアウト (400秒無応答検知・自動保護)")
+                        break
+                    yield ("tick", now - start_stream_time)
                     continue
 
+                last_chunk_time = time.time()
                 if chunk_type == "done":
                     break
                 elif chunk_type == "cancelled":
@@ -715,13 +891,19 @@ class AntigravitySession:
         self.active = False
         self.cancel()
         if self.loop and self.async_in_q and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self.async_in_q.put_nowait, None)
+            try:
+                self.loop.call_soon_threadsafe(self.async_in_q.put_nowait, None)
+            except Exception:
+                pass
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=10.0)
+            self.thread.join(timeout=2.0)
 
     def reset(self, system_instruction: Optional[str] = None):
         """Resets the persistent session and creates a fresh Agent context."""
         self.close()
+        self.turn_count = 0
+        self.created_at = time.time()
+        time.sleep(0.1)
         if system_instruction:
             self.system_instruction = system_instruction
         self._start_worker()

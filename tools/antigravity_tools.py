@@ -486,24 +486,31 @@ def coding_read_lines(file_path: str, start_line: int = 1, end_line: int = 100) 
 @default_loop_guard.guard
 def coding_surgical_replace(file_path: str, target_content: str, replacement_content: str) -> str:
     """Performs surgical minimal diff replacement by exact match without creating .bak files.
+    NOTE: Automatically executes built-in syntax validation (Syntax Gate) upon replacement,
+    eliminating the need to call coding_check_syntax separately.
 
     Args:
         file_path: Target file path.
         target_content: Exact substring to be replaced.
         replacement_content: New replacement content.
     Returns:
-        JSON string with success status.
+        JSON string with success status and syntax validation:
+        {"success": true, "file": file_path, "syntax_valid": true, "syntax_error": ""}
     """
     ct = CodingTools()
     try:
-        ok = ct.surgical_replace(file_path, target_content, replacement_content)
-        return json.dumps({"success": ok, "file": file_path})
+        res = ct.surgical_replace(file_path, target_content, replacement_content)
+        if isinstance(res, dict):
+            return json.dumps(res, ensure_ascii=False)
+        return json.dumps({"success": True, "file": file_path, "syntax_valid": True})
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "file": file_path, "error": str(e), "syntax_valid": False})
 
 @default_loop_guard.guard
 def coding_check_syntax(file_path: str) -> str:
-    """Performs syntax validation gate on Python or Shell scripts without running them.
+    """Performs standalone syntax validation gate on Python or Shell scripts without running them.
+    NOTE: coding_surgical_replace and file_write_safe ALREADY perform syntax validation automatically.
+    Do NOT call this repeatedly or redundantly after edits.
 
     Args:
         file_path: Path to script file to validate.
@@ -513,6 +520,24 @@ def coding_check_syntax(file_path: str) -> str:
     ct = CodingTools()
     res = ct.check_syntax(file_path)
     return json.dumps(res, ensure_ascii=False)
+
+@default_loop_guard.guard
+def coding_write_file(file_path: str, content: str) -> str:
+    """Creates a new file or completely overwrites an existing file with built-in syntax validation.
+    Creates parent directories automatically.
+
+    Args:
+        file_path: Target file path.
+        content: Complete file content to write.
+    Returns:
+        JSON string containing success status, syntax validation, and file path.
+    """
+    ct = CodingTools()
+    try:
+        res = ct.write_file(file_path, content)
+        return json.dumps(res, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "file": file_path, "error": str(e), "syntax_valid": False})
 
 @default_loop_guard.guard
 def coding_batch_surgical_replace(replacements_json: str) -> str:
@@ -605,19 +630,27 @@ def file_list_tree(path: str = "", max_depth: int = 2) -> str:
 @default_loop_guard.guard
 def file_write_safe(target_path: str, content: str) -> str:
     """Safely writes file without polluting workspace with .bak files.
+    Automatically performs built-in syntax validation for Python and Shell scripts.
 
     Args:
         target_path: Path of file to write.
         content: Text content to write.
     Returns:
-        JSON string indicating success or error.
+        JSON string indicating success and syntax validation status.
     """
     ft = FileTools()
+    ct = CodingTools()
     try:
         ok = ft.write_file_safe(target_path, content, make_backup=False)
-        return json.dumps({"success": ok, "file": target_path})
+        syntax_res = ct.check_syntax(target_path) if target_path.endswith((".py", ".sh", ".bash")) else {"valid": True, "error": ""}
+        return json.dumps({
+            "success": ok,
+            "file": target_path,
+            "syntax_valid": syntax_res.get("valid", True),
+            "syntax_error": syntax_res.get("error", "")
+        }, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return json.dumps({"success": False, "file": target_path, "error": str(e), "syntax_valid": False})
 
 def check_loop_status() -> str:
     """Returns current LoopGuard status, call counts, and history to prevent runaway loops."""
@@ -684,20 +717,65 @@ def rag_sync_all_files(max_files: int = 10000, force: bool = False) -> str:
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
-def rag_search_knowledge(query: str, top_k: int = 5) -> str:
+def rag_search_knowledge(query: str, top_k: int = 5, folder_filter: str = "") -> str:
     """Performs hybrid deep search (FTS5 + dense vector embeddings) across all documents in TUGUMI_RAG knowledge base.
 
     Args:
         query: Search question or keywords.
-        top_k: Number of most relevant knowledge chunks to return.
+        top_k: Number of most relevant knowledge chunks to return (default 5).
+        folder_filter: Optional folder or category filter.
     Returns:
         JSON string containing matched document chunks, file sources, and relevance scores.
     """
     try:
         from memory.rag_engine import HybridRAGEngine
         rag = HybridRAGEngine()
-        results = rag.search_hybrid(query=query, top_k=top_k)
-        return json.dumps({"status": "success", "results": results}, ensure_ascii=False)
+        ff = folder_filter.strip() if folder_filter else None
+        results = rag.search_hybrid(query=query, top_k=top_k, folder_filter=ff)
+        return json.dumps({"status": "success", "count": len(results), "results": results}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+def rag_add_knowledge(title: str, content: str, category: str = "task_knowledge") -> str:
+    """Adds a new knowledge document or finding into the TUGUMIv6 3072-dim Hybrid RAG knowledge base.
+
+    Args:
+        title: Clear title of the knowledge document.
+        content: Full markdown or text content to index into RAG.
+        category: Category / folder tag (e.g. 'task_knowledge', 'self_evolution', 'research', 'manual').
+    Returns:
+        JSON string confirming RAG registration and indexing status.
+    """
+    try:
+        from memory.rag_engine import HybridRAGEngine
+        rag = HybridRAGEngine()
+        ok = rag.add_knowledge(title=title, text=content, category=category or "task_knowledge")
+        return json.dumps({"status": "success" if ok else "error", "title": title, "category": category}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+def rag_list_files(folder_filter: str = "") -> str:
+    """Lists all indexed files and folder statistics in the TUGUMIv6 RAG knowledge base (TUGUMI_RAG).
+
+    Args:
+        folder_filter: Optional substring to filter by folder or path.
+    Returns:
+        JSON string with total counts, folder breakdown, and indexed file list.
+    """
+    try:
+        from memory.rag_engine import HybridRAGEngine
+        rag = HybridRAGEngine()
+        summary = rag.get_status_summary()
+        files = rag.list_indexed_files(folder_filter=folder_filter if folder_filter else None)
+        return json.dumps({
+            "status": "success",
+            "total_indexed_files": summary.get("total_indexed_files", 0),
+            "total_chunks": summary.get("total_chunks", 0),
+            "embedded_chunks": summary.get("embedded_chunks", 0),
+            "folder_stats": summary.get("folder_stats", {}),
+            "files_count": len(files),
+            "files": files
+        }, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
@@ -951,12 +1029,12 @@ def research_generate_html_report(title: str, markdown_content: str, theme: str 
 
 @default_loop_guard.guard
 def mcp_check_failure_risk(query: str) -> str:
-    """Searches past failure lessons and anti-patterns before executing sensitive or unfamiliar tasks.
+    """危険な操作や未知の作業を実行する前に、過去の失敗教訓やアンチパターン（SQLite FTS5）を事前検索してリスクを回避します。
     
     Args:
-        query: Keywords or description of the action to be performed (e.g. 'git push', 'pip install', 'sqlite lock').
+        query: 実行予定の操作内容やキーワード（例: 'git push', 'pip install', 'sqlite lock', 'shebang'）。
     Returns:
-        JSON string containing matched failure risks and recommended alternatives.
+        過去の失敗事例、禁止行為、および推奨される安全な代替策を含むJSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -967,15 +1045,15 @@ def mcp_check_failure_risk(query: str) -> str:
 
 @default_loop_guard.guard
 def mcp_record_failure_lesson(keyword: str, cause: str, forbidden_action: str, correct_alternative: str) -> str:
-    """Records a failure lesson, root cause, and correct alternative into SQLite FTS5 failure memory.
+    """新しく発見された失敗の根本原因、絶対に繰り返してはならない禁止事項、および実証済みの正しい代替策をSQLite FTS5失敗記憶に永続記録します。
     
     Args:
-        keyword: Distinctive keyword or trigger pattern.
-        cause: The detailed technical root cause.
-        forbidden_action: The erroneous action that must NEVER be repeated.
-        correct_alternative: The proven correct solution or command.
+        keyword: 失敗を識別・トリガーする特徴的キーワード。
+        cause: 技術的な詳細根本原因。
+        forbidden_action: 今後二度と行ってはならない誤った操作。
+        correct_alternative: 実証された正しい解決コマンドまたは代替手段。
     Returns:
-        JSON string confirmation.
+        記録結果と登録IDを含む確認JSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -991,15 +1069,15 @@ def mcp_record_failure_lesson(keyword: str, cause: str, forbidden_action: str, c
 
 @default_loop_guard.guard
 def mcp_race_resolve(date: str, venue: str, race_number: int, race_name: str = "") -> str:
-    """Resolves a horse race request (date, venue, race number) to a unique verified race.
+    """自然言語のレース指定（開催日、競馬場、レース番号）から、一意に確定・検証された正規レース情報を特定します。
     
     Args:
-        date: Race date in YYYY-MM-DD or YYYYMMDD format.
-        venue: Racecourse name (e.g. '東京', '中山', '阪神', '京都', '大井').
-        race_number: Race number (1-12).
-        race_name: Optional race name.
+        date: レース開催日（YYYY-MM-DD または YYYYMMDD形式）。
+        venue: 競馬場名（例: '東京', '中山', '阪神', '京都', '大井'）。
+        race_number: レース番号（1〜12）。
+        race_name: 任意のレース名（例: '天皇賞（秋）'）。
     Returns:
-        JSON string of resolved race details.
+        確定したレースIDおよび詳細情報のJSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1010,13 +1088,13 @@ def mcp_race_resolve(date: str, venue: str, race_number: int, race_name: str = "
 
 @default_loop_guard.guard
 def mcp_get_user_tweets(username: str, max_tweets: int = 5) -> str:
-    """Fetches recent tweets from a specific X (Twitter) user via x-scraper MCP.
+    """x-scraper MCPサーバーを経由して、指定したX (Twitter) ユーザーの最新ツイート一覧を取得します。
     
     Args:
-        username: The X username handle (without @).
-        max_tweets: Maximum number of tweets to retrieve (default: 5).
+        username: Xのユーザー名（@マーク不要）。
+        max_tweets: 取得するツイートの最大件数（デフォルト: 5）。
     Returns:
-        String containing recent tweets, text, and timestamps.
+        最新ツイート本文および投稿日時の整形文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1027,14 +1105,14 @@ def mcp_get_user_tweets(username: str, max_tweets: int = 5) -> str:
 
 @default_loop_guard.guard
 def mcp_call(server_name: str, tool_name: str, arguments_json: str = "{}") -> str:
-    """Executes any tool on any active MCP server (github, playwright, research, tugumi_v6, etc.).
+    """稼働中の任意のMCPサーバー（github, playwright, research, tugumi_v6等）のツールを直接呼び出して実行します。
     
     Args:
-        server_name: The target MCP server name (e.g. 'github', 'playwright', 'research', 'tugumi_v6').
-        tool_name: The exact MCP tool name (e.g. 'search_repositories', 'playwright_scrape').
-        arguments_json: A JSON string containing arguments for the tool.
+        server_name: 対象MCPサーバー名（例: 'github', 'playwright', 'research', 'tugumi_v6'）。
+        tool_name: 実行するMCPツール名（例: 'search_repositories', 'playwright_scrape'）。
+        arguments_json: ツール引数を格納したJSON文字列。
     Returns:
-        JSON string or raw result of the MCP tool execution.
+        MCPツールの実行結果（JSON文字列またはテキスト）。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1046,14 +1124,14 @@ def mcp_call(server_name: str, tool_name: str, arguments_json: str = "{}") -> st
 
 @default_loop_guard.guard
 def mcp2_start_task(server_name: str, tool_name: str, arguments_json: str = "{}") -> str:
-    """Starts an asynchronous long-running task via MCP 2.0 Tasks Extension.
+    """MCP 2.0 Tasks Extension仕様に準拠し、長時間実行される非同期バックグラウンドタスクを開始します。
     
     Args:
-        server_name: Target MCP server name.
-        tool_name: Target tool name to run asynchronously.
-        arguments_json: JSON string of arguments.
+        server_name: 対象MCPサーバー名。
+        tool_name: 非同期実行するツール名。
+        arguments_json: ツール引数のJSON文字列。
     Returns:
-        JSON string containing task_id and initial status.
+        task_idおよび初期状態を含むJSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1065,13 +1143,13 @@ def mcp2_start_task(server_name: str, tool_name: str, arguments_json: str = "{}"
 
 @default_loop_guard.guard
 def mcp2_task_status(server_name: str, task_id: str) -> str:
-    """Queries status of an ongoing or completed task via MCP 2.0 Tasks Extension.
+    """MCP 2.0 Tasks Extensionに準拠し、実行中または完了した非同期タスクの進捗状況・実行結果を照会します。
     
     Args:
-        server_name: Target MCP server name.
-        task_id: Unique task identifier.
+        server_name: 対象MCPサーバー名。
+        task_id: 照会するタスクの一意識別子（task_id）。
     Returns:
-        JSON string containing task status, progress, or results.
+        タスクのステータス、進捗度、または実行結果を含むJSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1082,13 +1160,13 @@ def mcp2_task_status(server_name: str, task_id: str) -> str:
 
 @default_loop_guard.guard
 def mcp2_task_cancel(server_name: str, task_id: str) -> str:
-    """Cancels an ongoing asynchronous task via MCP 2.0 Tasks Extension.
+    """MCP 2.0 Tasks Extensionに準拠し、実行中の非同期バックグラウンドタスクを安全に中断・キャンセルします。
     
     Args:
-        server_name: Target MCP server name.
-        task_id: Unique task identifier to cancel.
+        server_name: 対象MCPサーバー名。
+        task_id: キャンセルするタスクの一意識別子（task_id）。
     Returns:
-        JSON string confirmation of cancellation.
+        キャンセル処理結果を含む確認JSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1099,14 +1177,14 @@ def mcp2_task_cancel(server_name: str, task_id: str) -> str:
 
 @default_loop_guard.guard
 def mcp2_render_app(server_name: str, app_name: str, app_args_json: str = "{}") -> str:
-    """Renders a UI component view via MCP 2.0 Apps Extension (HTML/Bento Grid).
+    """MCP 2.0 Apps Extensionに準拠し、WebUI / Bento Grid用の対話型UIコンポーネントビューを描画します。
     
     Args:
-        server_name: Target MCP server name.
-        app_name: Name of the application UI view.
-        app_args_json: JSON string of arguments.
+        server_name: 対象MCPサーバー名。
+        app_name: 描画するUIビュー名。
+        app_args_json: 描画パラメータのJSON文字列。
     Returns:
-        JSON string or HTML component data for WebUI/Bento Grid.
+        HTMLまたはJSON形式のUIコンポーネントデータ。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1118,12 +1196,12 @@ def mcp2_render_app(server_name: str, app_name: str, app_args_json: str = "{}") 
 
 @default_loop_guard.guard
 def mcp2_protocol_info(server_name: str = "") -> str:
-    """Retrieves negotiated MCP protocol versions and server capabilities (MCP 2.0 SOTA).
+    """MCP 2.0仕様に基づく各MCPサーバーとのプロトコルバージョン合意状況および対応機能バッジを取得します。
     
     Args:
-        server_name: Optional server name. If omitted, returns all active servers.
+        server_name: 照会するサーバー名（省略時は全アクティブサーバーの情報を返却）。
     Returns:
-        JSON string containing protocol version and capabilities.
+        プロトコルバージョンおよび機能サポート情報を含むJSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1150,12 +1228,12 @@ def mcp2_protocol_info(server_name: str = "") -> str:
 
 @default_loop_guard.guard
 def mcp_metasploit_list_exploits(search_term: str = "") -> str:
-    """Lists available Metasploit exploits, optionally filtered by keyword.
+    """Metasploit Frameworkで利用可能なエクスプロイトモジュールを検索・一覧取得します。
     
     Args:
-        search_term: Optional keyword to filter exploits.
+        search_term: 検索するキーワード（例: 'eternalblue', 'smb', 'apache'）。
     Returns:
-        JSON string of matched exploit modules.
+        合致するモジュール名と概要の一覧JSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1166,18 +1244,18 @@ def mcp_metasploit_list_exploits(search_term: str = "") -> str:
 
 @default_loop_guard.guard
 def mcp_metasploit_run_exploit(exploit_name: str, rhost: str, rport: int, lhost: str, lport: int, payload_name: str = "", extra_options_json: str = "{}") -> str:
-    """Runs a Metasploit exploit module against a target with specified payload and parameters.
+    """Metasploit Frameworkのエクスプロイトモジュールをターゲットに対して安全に実行します。
     
     Args:
-        exploit_name: Metasploit module path (e.g. 'unix/webapp/wp_admin_shell_upload').
-        rhost: Target IP or hostname.
-        rport: Target port.
-        lhost: Local listener IP.
-        lport: Local listener port.
-        payload_name: Target payload (e.g. 'generic/shell_reverse_tcp').
-        extra_options_json: JSON string of additional module options.
+        exploit_name: 実行するエクスプロイトモジュール名（例: 'unix/webapp/wp_admin_shell_upload'）。
+        rhost: 標的IPアドレスまたはホスト名。
+        rport: 標的ポート番号。
+        lhost: リバース接続を受信するローカルIPアドレス。
+        lport: リバース接続を受信するローカルポート番号。
+        payload_name: ペイロード名（例: 'generic/shell_reverse_tcp'）。
+        extra_options_json: 追加オプションのJSON文字列。
     Returns:
-        JSON string of execution results and job/session status.
+        エクスプロイト実行結果およびセッション確立状態のJSON文字列。
     """
     try:
         from tools.tugumi_mcp import mcp
@@ -1260,6 +1338,7 @@ def get_tugumi_tools() -> list:
         coding_grep_search,
         coding_read_lines,
         coding_surgical_replace,
+        coding_write_file,
         coding_batch_surgical_replace,
         coding_check_syntax,
         # Termux & Shizuku+
@@ -1274,6 +1353,8 @@ def get_tugumi_tools() -> list:
         # RAG Knowledge Engine (TUGUMI_RAG / Obsidian / TUGUMIDesk)
         rag_sync_all_files,
         rag_search_knowledge,
+        rag_add_knowledge,
+        rag_list_files,
         # Company Knowledge Hub (Shared Database)
         company_knowledge_search,
         company_knowledge_publish,
@@ -1285,7 +1366,7 @@ def get_tugumi_tools() -> list:
         # Research & Reporting
         research_save_report,
         research_generate_html_report,
-        # MCP 2.0 Native Function Bridges
+        # MCP 2.0 Native Function Bridges & Stateless/Tasks/Apps Extensions (2026-07-28)
         mcp_check_failure_risk,
         mcp_record_failure_lesson,
         mcp_race_resolve,
@@ -1293,6 +1374,11 @@ def get_tugumi_tools() -> list:
         mcp_call,
         mcp_metasploit_list_exploits,
         mcp_metasploit_run_exploit,
+        mcp2_start_task,
+        mcp2_task_status,
+        mcp2_task_cancel,
+        mcp2_render_app,
+        mcp2_protocol_info,
     ]
     try:
         from core.dynamic_skill_synthesizer import DynamicSkillSynthesizer

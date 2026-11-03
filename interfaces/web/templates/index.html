@@ -1440,9 +1440,9 @@
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
               <button class="bp" id="btnRefLatestSs" style="flex:1;min-width:140px;padding:5px 8px;font-size:10px;background:rgba(0,240,255,.15);border:1px solid var(--cyan);color:var(--cyan);font-weight:700" onclick="A.selectDressupRef('latest_ss')">📸 最新スクショを使用</button>
               <button class="bp" id="btnRefGold" style="flex:1;min-width:140px;padding:5px 8px;font-size:10px;background:rgba(255,215,0,.15);border:1px solid var(--gold);color:var(--gold);font-weight:700" onclick="A.selectDressupRef('gold')">⭐ 金型モデル (黄金比)</button>
-              <button class="bp" style="flex:1;min-width:120px;padding:5px 8px;font-size:10px;background:rgba(255,255,255,.08);border:1px solid var(--bdr);color:var(--txt)" onclick="$('#dressupFileInput').click()">📁 端末画像アップロード</button>
+              <button class="bp" style="flex:1;min-width:120px;padding:5px 8px;font-size:10px;background:rgba(255,255,255,.08);border:1px solid var(--bdr);color:var(--txt)" onclick="A.triggerDressupUpload()">📁 端末画像アップロード</button>
               <button class="bp" style="flex:1;min-width:140px;padding:5px 8px;font-size:10px;background:linear-gradient(90deg, #b026ff, #ff007f);color:#fff;font-weight:700" onclick="A.createFreshModelDirect()">✨ 新規清楚美女を創成</button>
-              <input type="file" id="dressupFileInput" accept="image/*" style="display:none" onchange="A.handleDressupFileSelect(this.files)">
+              <input type="file" id="dressupFileInput" accept="image/*" style="display:none" onchange="A.handleDressupFileSelect(this.files, this)">
             </div>
 
             <!-- 選択中リファレンスプレビュー表示 -->
@@ -2516,11 +2516,11 @@
 
       <!-- 画像アップロード・ドラッグ＆ドロップエリア -->
       <div id="studioDropZoneContainer">
-        <div style="border:2px dashed var(--bdr);border-radius:var(--rs);padding:18px;text-align:center;background:rgba(0,0,0,.2);cursor:pointer" onclick="$('#studioFileInput').click()" ondragover="event.preventDefault()" ondrop="A.handleStudioDrop(event)">
+        <div style="border:2px dashed var(--bdr);border-radius:var(--rs);padding:18px;text-align:center;background:rgba(0,0,0,.2);cursor:pointer" onclick="A.triggerStudioUpload()" ondragover="event.preventDefault()" ondrop="A.handleStudioDrop(event)">
           <div style="font-size:24px;margin-bottom:6px">📁 ➔ 🖼️</div>
           <div style="font-size:11px;font-weight:700;color:var(--cyan)" id="studioUploadTitle">画像をここへドラッグ＆ドロップ、またはタップして選択</div>
           <div style="font-size:10px;color:var(--muted);margin-top:4px" id="studioUploadDesc">複数画像の合成には2枚以上の画像を選択してください (スマホのギャラリーから複数選択可能)</div>
-          <input type="file" id="studioFileInput" multiple accept="image/*" style="display:none" onchange="A.handleStudioFiles(this.files)">
+          <input type="file" id="studioFileInput" multiple accept="image/*" style="display:none" onchange="A.handleStudioFiles(this.files, this)">
         </div>
 
         <!-- 選択中画像サムネイルプレビュー -->
@@ -2534,7 +2534,7 @@
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
             <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(0,240,255,.15);border:1px solid var(--cyan);color:var(--cyan);font-weight:700" onclick="A.selectDressupRef('latest_ss')">📸 最新スクショ</button>
             <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(255,215,0,.15);border:1px solid var(--gold);color:var(--gold);font-weight:700" onclick="A.selectDressupRef('gold')">⭐ 金型モデル</button>
-            <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(255,255,255,.08);border:1px solid var(--bdr);color:var(--txt)" onclick="$('#studioFileInput').click()">📁 端末から選択</button>
+            <button class="bp" style="flex:1;min-width:120px;padding:4px 8px;font-size:10px;background:rgba(255,255,255,.08);border:1px solid var(--bdr);color:var(--txt)" onclick="A.triggerStudioUpload()">📁 端末から選択</button>
           </div>
           <div id="studioDressupRefPreview" style="display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.4);border:1px solid var(--bdr);border-radius:4px;padding:6px">
             <img id="studioDressupRefThumb" src="/api/media/file/image/ref_model_closeup.png" style="width:50px;height:50px;object-fit:cover;border-radius:4px;border:1px solid var(--pink)" alt="Ref">
@@ -2637,6 +2637,13 @@
         <div style="min-width:0">
           <label style="font-size:11px;font-weight:700;color:var(--cyan);display:block;margin-bottom:4px">🎯 チャート上位ジャンル選択:</label>
           <select id="msGenrePreset" style="width:100%;max-width:100%;padding:6px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:11px">
+            <optgroup label="⚡ fripSide / デジタルJ-Rock & トランス">
+              <option value="fripside_railgun">⚡ fripSide風 電脳トランス・デジタルJ-Rock (only my railgun / LEVEL5風 / 南條愛乃クリスタルハイトーン / 142BPM)</option>
+            </optgroup>
+            <optgroup label="🎹 小室哲哉 (TKサウンド / PANDORA)">
+              <option value="pandora_be_the_one" selected>⚡ PANDORA風 EDMアンセム (小室哲哉×浅倉大介 / Be The One風 / Beverly超絶ハイトーン / 128BPM)</option>
+              <option value="tk_dance_pop">🎹 90s TKサウンド / 伝説の小室哲哉風・ユーロダンス・ポップ (globe/TRF/華原朋美風 / 小室進行 / 138BPM)</option>
+            </optgroup>
             <optgroup label="🌸 アイドルソング (女性・合唱)">
               <option value="sakamichi_idol">🌸 坂道系エモ・アイドル (乃木坂46/櫻坂46風 / ピアノ＆ストリングス / 136BPM)</option>
               <option value="sparkle_idol">✨ 王道キラキラ・アイドルポップ (コール＆レスポンス / クラップ / 168BPM)</option>
@@ -2660,10 +2667,13 @@
         <div style="min-width:0">
           <label style="font-size:11px;font-weight:700;color:var(--cyan);display:block;margin-bottom:4px">🎤 ボーカル声質プロファイル:</label>
           <select id="msVocalPreset" style="width:100%;max-width:100%;padding:6px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:11px">
-            <optgroup label="🌸 アイドル＆女性ボーカル">
+            <optgroup label="🌸 アイドル＆女性ボーカル / ディーバ">
+              <option value="fripside_crystalline">⚡ クリスタル・アニソンヒロイン (南條愛乃 / fripSide風 / 超高速16分音符・どこまでも透き通るハイトーン)</option>
+              <option value="beverly_high_power">🔥 世界水準超絶ハイトーン・ディーバ (Beverly風 / 驚異の3オクターブ・圧倒的声量と突き抜け)</option>
+              <option value="tk_diva">💎 90s TKダンスディーバ (どこまでも突き抜ける驚異のハイトーン・KEIKO/華原朋美風)</option>
+              <option value="female_soprano">⚡ 女性ソプラノ (澄み渡るハイトーン・サビの爆発的ベルティング)</option>
               <option value="female_idol_unison">🌸 女性アイドルグループ・ユニゾン合唱 (透明感・清楚・青春の合唱)</option>
               <option value="female_idol_solo">✨ 女性アイドル・ソロ (キュート＆エモーショナル・キラキラ声)</option>
-              <option value="female_soprano">⚡ 女性ソプラノ (澄み渡るハイトーン・サビの爆発的ベルティング)</option>
               <option value="female_alto">🍸 女性アルト (スモーキー＆シルキー・大人の親密感)</option>
             </optgroup>
             <optgroup label="🕺 男性ボーカル">
@@ -2682,9 +2692,36 @@
         <input id="msTitleIn" placeholder="例: 深夜2時のテールランプ、Starlight Resonance" style="width:100%;padding:6px 8px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:11px;outline:none">
       </div>
 
+      <!-- 📄 歌詞ファイル (.txt) 読み込み & 歌詞完全保全作曲セクション -->
+      <div style="background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.3);border-radius:var(--rs);padding:10px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+          <label style="font-size:11px;font-weight:700;color:var(--purple);display:flex;align-items:center;gap:6px">
+            <span>📄 自作の歌詞ファイル (.txt) から曲を作る (歌詞完全保持モード)</span>
+            <span style="font-size:9px;background:rgba(0,255,128,.15);color:var(--green);border:1px solid rgba(0,255,128,.3);padding:1px 5px;border-radius:3px">オススメ</span>
+          </label>
+          <div style="display:flex;gap:4px">
+            <button class="btn-mini" style="border-color:var(--cyan);color:var(--cyan);font-weight:700" onclick="A.triggerLyricsFileUpload()">📁 端末の.txtを選択</button>
+            <input type="file" id="msLyricsFileInput" accept=".txt,.text,.md" style="display:none" onchange="A.handleLyricsFileSelect(this.files, this)">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:6px">
+          <input id="msLyricsPathIn" placeholder="例: /storage/emulated/0/TUGUMIDesk/my_lyrics.txt または 相対パス" style="flex:1;padding:5px 8px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:10px;outline:none">
+          <button class="bp" style="padding:5px 12px;font-size:10px;background:rgba(0,240,255,.15);border:1px solid var(--cyan);color:var(--cyan);font-weight:700" onclick="A.loadLyricsFromPath()">📥 パスから読込</button>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:4px">
+            <span style="font-size:10px;color:var(--muted)">読み込まれた歌詞（この歌詞を100%保持して最高峰の曲を作曲します）:</span>
+            <button class="btn-mini" id="msAnalyzeLyricsBtn" style="border-color:var(--purple);color:var(--purple);font-weight:700" onclick="A.analyzeLoadedLyrics()">✨ 歌詞から曲調・ジャンルを自動推論</button>
+          </div>
+          <textarea id="msExactLyricsIn" rows="5" placeholder="ここに読み込まれた歌詞が表示されます。直接キーボードで歌詞を入力・編集することも可能です。" style="width:100%;padding:8px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:10px;outline:none;resize:vertical;font-family:var(--mono)"></textarea>
+        </div>
+      </div>
+
       <div>
-        <label style="font-size:11px;font-weight:700;color:var(--cyan);display:block;margin-bottom:4px">💭 歌詞のイメージ・情景・曲の要望 (自由記述):</label>
-        <textarea id="msConceptIn" rows="4" placeholder="例: 雨の深夜、首都高をひとり飛ばしながら過去の恋に別れを告げる疾走感のあるアニソン風ロック。サビは突き抜けるハイトーンで叫ぶようなメロディ。既読のつかないスマホ画面の情景を入れてほしい。" style="width:100%;padding:8px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:11px;outline:none;resize:vertical"></textarea>
+        <label style="font-size:11px;font-weight:700;color:var(--cyan);display:block;margin-bottom:4px">💭 歌詞のイメージ・情景・曲の要望 (任意・自由記述):</label>
+        <textarea id="msConceptIn" rows="3" placeholder="例: 雨の深夜、首都高をひとり飛ばしながら過去の恋に別れを告げる疾走感のあるアニソン風ロック。サビは突き抜けるハイトーンで叫ぶようなメロディ。既読のつかないスマホ画面の情景を入れてほしい。" style="width:100%;padding:8px;background:var(--input-bg);border:1px solid var(--bdr);border-radius:var(--rx);color:var(--txt);font-size:11px;outline:none;resize:vertical"></textarea>
       </div>
 
       <!-- 実行ボタン -->
@@ -2880,6 +2917,8 @@
   <div class="toast-c" id="toastC"></div>
 
 <script>
+window.$ = s => document.querySelector(s);
+window.$$ = s => document.querySelectorAll(s);
 const A=(()=>{
   const st={
     mode:'light',tab:'chat',streaming:false,ac:null,autoScroll:true,mc:0,
@@ -3240,6 +3279,31 @@ const A=(()=>{
               rDet.innerHTML=`<summary style="cursor:pointer;color:#34d399;font-weight:700;font-family:var(--mono)">📚 Auto-RAG 参照: ${ev.hits}件 (${titles||'ナレッジ注入済'})</summary>`
                 +(srcHtml||`<div style="margin-top:4px;color:#cbd5e1">${titles}</div>`);
               ce.appendChild(rDet);
+            }else if(ev.type==='tick'){
+              const typEl=ce.querySelector('.typing');
+              if(typEl){
+                let tb=typEl.querySelector('.tb-timer');
+                if(!tb){
+                  tb=document.createElement('span');
+                  tb.className='tb-timer';
+                  tb.style.cssText='font-size:9px;color:var(--cyan);margin-left:8px;font-family:var(--mono);opacity:0.8';
+                  typEl.appendChild(tb);
+                }
+                tb.textContent=`⏱ ${ev.elapsed}s`;
+              }
+              if(tw){
+                const twTitle=tw.querySelector('.tw-t');
+                if(twTitle){
+                  let twSub=twTitle.querySelector('.tw-sub');
+                  if(!twSub){
+                    twSub=document.createElement('span');
+                    twSub.className='tw-sub';
+                    twSub.style.cssText='font-size:9px;color:var(--cyan);margin-left:6px;font-family:var(--mono)';
+                    twTitle.appendChild(twSub);
+                  }
+                  twSub.textContent=`⏱ ${ev.elapsed}s`;
+                }
+              }
             }else if(ev.type==='text'){
               if(ft){
                 const typEl=ce.querySelector('.typing');if(typEl)typEl.remove();
@@ -7309,9 +7373,26 @@ const A=(()=>{
     }
   }
 
-  async function handleStudioFiles(files){
+  function triggerStudioUpload(){
+    const inp = $('#studioFileInput') || document.getElementById('studioFileInput');
+    if(inp){
+      inp.value = '';
+      inp.click();
+    }
+  }
+
+  function triggerDressupUpload(){
+    const inp = $('#dressupFileInput') || document.getElementById('dressupFileInput');
+    if(inp){
+      inp.value = '';
+      inp.click();
+    }
+  }
+
+  async function handleStudioFiles(files, inputEl){
     if(!files || !files.length) return;
     toast(`📁 ${files.length}枚の画像をアップロード中...`, 'inf');
+    let lastUploaded = null;
     for(let i=0; i<files.length; i++){
       const f = files[i];
       const fd = new FormData();
@@ -7321,6 +7402,7 @@ const A=(()=>{
         const d = await r.json();
         if(d.success){
           studioImages.push(d);
+          lastUploaded = d;
         }else{
           toast('アップロード失敗: ' + (d.error || f.name), 'err');
         }
@@ -7329,7 +7411,13 @@ const A=(()=>{
       }
     }
     renderStudioThumbnails();
-    toast(`✔ 画像の準備が完了しました (${studioImages.length}枚)`, 'ok');
+    if(currentStudioMode === 'dressup' && lastUploaded){
+      selectDressupRef('custom', lastUploaded);
+      toast(`✔ 着せ替えリファレンスにセットしました: ${lastUploaded.filename || lastUploaded.name}`, 'ok');
+    }else{
+      toast(`✔ 画像の準備が完了しました (${studioImages.length}枚)`, 'ok');
+    }
+    if(inputEl) inputEl.value = '';
   }
 
   function renderStudioThumbnails(){
@@ -7583,7 +7671,7 @@ const A=(()=>{
     }
   }
 
-  async function handleDressupFileSelect(files){
+  async function handleDressupFileSelect(files, inputEl){
     if(!files || !files.length) return;
     const f = files[0];
     toast(`📁 リファレンス画像「${f.name}」をアップロード中...`, 'inf');
@@ -7594,11 +7682,14 @@ const A=(()=>{
       const d = await r.json();
       if(d.success){
         selectDressupRef('custom', d);
+        toast(`✔ リファレンス画像「${d.filename || f.name}」をセットしました！`, 'ok');
       }else{
         toast('アップロード失敗: ' + (d.error || f.name), 'err');
       }
     }catch(e){
       toast('通信エラー: ' + e.message, 'err');
+    }finally{
+      if(inputEl) inputEl.value = '';
     }
   }
 
@@ -7737,21 +7828,117 @@ const A=(()=>{
     if(ov) ov.classList.remove('on');
   }
 
+  function triggerLyricsFileUpload(){
+    const inp = $('#msLyricsFileInput') || document.getElementById('msLyricsFileInput');
+    if(inp){
+      inp.value = '';
+      inp.click();
+    }
+  }
+
+  function handleLyricsFileSelect(files, inputEl){
+    if(!files || !files.length) return;
+    const f = files[0];
+    const reader = new FileReader();
+    reader.onload = e => {
+      const text = e.target.result;
+      const ta = $('#msExactLyricsIn');
+      if(ta){
+        ta.value = text;
+        toast(`✔ 歌詞ファイル「${f.name}」を読み込みました (${text.length}文字)`, 'ok');
+        analyzeLoadedLyrics();
+      }
+    };
+    reader.onerror = err => {
+      toast('歌詞ファイルの読み込みに失敗しました: ' + err.message, 'err');
+    };
+    reader.readAsText(f);
+    if(inputEl) inputEl.value = '';
+  }
+
+  async function loadLyricsFromPath(){
+    const pIn = $('#msLyricsPathIn');
+    const path = pIn ? pIn.value.trim() : '';
+    if(!path){
+      toast('歌詞ファイルのパスを入力してください', 'err');
+      return;
+    }
+    toast(`📄 「${path}」を読み込み中...`, 'inf');
+    try{
+      const r = await fetch('/api/music/lyrics/read', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({file_path: path})
+      });
+      const d = await r.json();
+      if(d.success){
+        const ta = $('#msExactLyricsIn');
+        if(ta) ta.value = d.lyrics;
+        toast(`✔ 歌詞を正常に読み込みました (${d.length_chars}文字 / ${d.lines_count}行)`, 'ok');
+        analyzeLoadedLyrics();
+      }else{
+        toast('読込失敗: ' + (d.error || 'ファイルが見つかりません'), 'err');
+      }
+    }catch(e){
+      toast('通信エラー: ' + e.message, 'err');
+    }
+  }
+
+  async function analyzeLoadedLyrics(){
+    const ta = $('#msExactLyricsIn');
+    const lyrics = ta ? ta.value.trim() : '';
+    if(!lyrics){
+      toast('先に歌詞ファイルを読み込むか、歌詞を入力してください', 'err');
+      return;
+    }
+    toast('✨ 歌詞の世界観・感情・最適ジャンルをAI推論中...', 'inf');
+    try{
+      const r = await fetch('/api/music/lyrics/analyze', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({lyrics: lyrics})
+      });
+      const d = await r.json();
+      if(d.success){
+        if(d.suggested_genre_id && $('#msGenrePreset')){
+          $('#msGenrePreset').value = d.suggested_genre_id;
+        }
+        if(d.suggested_vocal_id && $('#msVocalPreset')){
+          $('#msVocalPreset').value = d.suggested_vocal_id;
+        }
+        if(d.suggested_title && $('#msTitleIn') && !$('#msTitleIn').value.trim()){
+          $('#msTitleIn').value = d.suggested_title;
+        }
+        toast(`🎯 推論適用: [${d.suggested_genre_name || d.suggested_genre_id}] ${d.suggested_bpm || ''}BPM / Key:${d.suggested_key || ''}`, 'ok');
+      }else{
+        toast('解析失敗: ' + (d.error || 'エラー'), 'err');
+      }
+    }catch(e){
+      toast('通信エラー: ' + e.message, 'err');
+    }
+  }
+
   async function executeMusicProduce(){
     const genre = $('#msGenrePreset') ? $('#msGenrePreset').value : 'emotional_rock';
     const vocal = $('#msVocalPreset') ? $('#msVocalPreset').value : 'female_soprano';
     const title = $('#msTitleIn') ? $('#msTitleIn').value.trim() : '';
     const concept = $('#msConceptIn') ? $('#msConceptIn').value.trim() : '';
+    const exactLyrics = ($('#msExactLyricsIn') ? $('#msExactLyricsIn').value : '').trim();
+    const lyricsPath = ($('#msLyricsPathIn') ? $('#msLyricsPathIn').value : '').trim();
     const loading = $('#msLoading');
     const resArea = $('#msResultArea');
 
-    if(!concept){
-      toast('歌詞・曲のイメージを入力してください', 'err');
+    if(!concept && !exactLyrics && !lyricsPath){
+      toast('歌詞テキスト、または歌詞・曲のイメージを入力してください', 'err');
       return;
     }
 
     if(loading) loading.classList.remove('hid');
     if(resArea) resArea.classList.add('hid');
+
+    if(exactLyrics){
+      toast('🎵 自作歌詞を100%保持し、調和する神曲をプロデュース中...', 'inf');
+    }
 
     try{
       const r = await fetch('/api/music/produce', {
@@ -7762,7 +7949,9 @@ const A=(()=>{
           genre_preset: genre,
           vocal_type: vocal,
           title: title,
-          synthesize_audio: true
+          synthesize_audio: true,
+          exact_lyrics: exactLyrics,
+          lyrics_path: lyricsPath
         })
       });
       const d = await r.json();
@@ -7971,42 +8160,94 @@ const A=(()=>{
       grid.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:12px;grid-column:1/-1;text-align:center">生成されたメディアファイルはまだありません</div>';
       return;
     }
-    grid.innerHTML = list.slice(0, 30).map(f => {
+    grid.innerHTML = list.slice(0, 50).map(f => {
       const safeName = esc(f.name || '');
       const url = esc(f.preview_url || '');
       const kb = Math.max(1, Math.round((f.size_bytes || 0) / 1024));
+      const folder = esc(f.folder || '');
+      const fType = esc(f.type || '');
       if(f.type === 'image'){
-        return `<div style="background:rgba(0,0,0,.45);border:1px solid var(--bdr);border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:4px">
-          <img src="${url}" alt="${safeName}" loading="lazy" style="width:100%;height:90px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="A.previewMediaItem('${url}','${safeName}','image')">
+        return `<div style="background:rgba(0,0,0,.45);border:1px solid var(--bdr);border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:4px;position:relative">
+          <img src="${url}" alt="${safeName}" loading="lazy" style="width:100%;height:90px;object-fit:cover;border-radius:4px;cursor:pointer" onclick="A.previewMediaItem('${url}','${safeName}','image','${folder}')">
           <div style="font-size:9px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safeName}">${safeName}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:8px;color:var(--muted)">
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:8px;color:var(--muted);gap:4px">
             <span>🖼️ ${kb}KB</span>
-            <a href="${url}" download="${safeName}" style="color:var(--cyan);text-decoration:none;font-weight:700">📥 DL</a>
+            <div style="display:flex;gap:6px;align-items:center">
+              <a href="${url}" download="${safeName}" style="color:var(--cyan);text-decoration:none;font-weight:700">📥 DL</a>
+              <button onclick="A.deleteMediaFile('${folder}','${safeName}','${fType}')" style="background:rgba(255,0,85,.15);border:1px solid rgba(255,0,85,.4);color:#ff3366;border-radius:3px;font-size:8px;padding:1px 4px;cursor:pointer" title="削除">🗑️</button>
+            </div>
           </div>
         </div>`;
       }else{
-        return `<div style="background:rgba(0,0,0,.45);border:1px solid var(--bdr);border-radius:6px;padding:6px;display:flex;flex-direction:column;justify-content:space-between;gap:4px">
+        return `<div style="background:rgba(0,0,0,.45);border:1px solid var(--bdr);border-radius:6px;padding:6px;display:flex;flex-direction:column;justify-content:space-between;gap:4px;position:relative">
           <div style="font-size:10px;font-weight:700;color:var(--purple);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safeName}">🎵 ${safeName}</div>
           <audio controls preload="none" src="${url}" style="width:100%;height:26px"></audio>
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:8px;color:var(--muted)">
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:8px;color:var(--muted);gap:4px">
             <span>🎼 ${kb}KB</span>
-            <a href="${url}" download="${safeName}" style="color:var(--cyan);text-decoration:none;font-weight:700">📥 DL</a>
+            <div style="display:flex;gap:6px;align-items:center">
+              <a href="${url}" download="${safeName}" style="color:var(--cyan);text-decoration:none;font-weight:700">📥 DL</a>
+              <button onclick="A.deleteMediaFile('${folder}','${safeName}','${fType}')" style="background:rgba(255,0,85,.15);border:1px solid rgba(255,0,85,.4);color:#ff3366;border-radius:3px;font-size:8px;padding:1px 4px;cursor:pointer" title="削除">🗑️</button>
+            </div>
           </div>
         </div>`;
       }
     }).join('');
   }
 
-  function previewMediaItem(url, name, type){
+  async function deleteMediaFile(folder, name, type){
+    const typeLabel = type === 'music' ? '楽曲' : '画像';
+    if(!confirm(`本当にこの${typeLabel}「${name}」を削除しますか？\n（端末ストレージからも完全に消去されます）`)){
+      return;
+    }
+    try{
+      toast(`🗑️ 「${name}」を削除中...`, 'inf');
+      const r = await fetch('/api/media/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({folder: folder, filename: name, file_type: type})
+      });
+      const d = await r.json();
+      if(d.success){
+        toast(`✔ 「${name}」を完全に削除しました`, 'ok');
+        const prev = $('#mediaStudioPreview');
+        if(prev) prev.classList.add('hid');
+        loadMediaGallery(false);
+      }else{
+        toast('削除失敗: ' + (d.error || 'エラーが発生しました'), 'err');
+      }
+    }catch(e){
+      toast('削除通信エラー: ' + e.message, 'err');
+    }
+  }
+
+  function previewMediaItem(url, name, type, folder=''){
     const prev = $('#mediaStudioPreview');
     const title = $('#mediaStudioPreviewTitle');
     const body = $('#mediaStudioPreviewBody');
     if(!prev || !title || !body) return;
     title.textContent = `🗂️ メディアプレビュー: ${name}`;
+    const safeUrl = esc(url);
+    const safeName = esc(name);
+    const safeFolder = esc(folder);
+    const safeType = esc(type);
     if(type === 'image'){
-      body.innerHTML = `<div style="text-align:center"><img src="${esc(url)}" style="max-width:100%;max-height:360px;border-radius:6px;border:1px solid var(--bdr)"><div style="margin-top:6px"><a href="${esc(url)}" download="${esc(name)}" class="bp" style="display:inline-block;padding:4px 12px;font-size:10px;text-decoration:none;background:var(--cyan);color:#000;font-weight:700">📥 原寸ダウンロード</a></div></div>`;
+      body.innerHTML = `
+        <div style="text-align:center">
+          <img src="${safeUrl}" style="max-width:100%;max-height:360px;border-radius:6px;border:1px solid var(--bdr)">
+          <div style="margin-top:10px;display:flex;gap:8px;justify-content:center;align-items:center">
+            <a href="${safeUrl}" download="${safeName}" class="bp" style="display:inline-block;padding:5px 14px;font-size:10px;text-decoration:none;background:var(--cyan);color:#000;font-weight:700">📥 原寸ダウンロード</a>
+            <button onclick="A.deleteMediaFile('${safeFolder}','${safeName}','${safeType}')" class="bp" style="padding:5px 14px;font-size:10px;background:rgba(255,0,85,.15);border:1px solid #ff0055;color:#ff3366;font-weight:700">🗑️ この画像を削除</button>
+          </div>
+        </div>`;
     }else{
-      body.innerHTML = `<audio controls autoplay src="${esc(url)}" style="width:100%"></audio>`;
+      body.innerHTML = `
+        <div style="padding:8px 0">
+          <audio controls autoplay src="${safeUrl}" style="width:100%"></audio>
+          <div style="margin-top:10px;display:flex;gap:8px;justify-content:center;align-items:center">
+            <a href="${safeUrl}" download="${safeName}" class="bp" style="display:inline-block;padding:5px 14px;font-size:10px;text-decoration:none;background:var(--cyan);color:#000;font-weight:700">📥 楽曲ダウンロード</a>
+            <button onclick="A.deleteMediaFile('${safeFolder}','${safeName}','${safeType}')" class="bp" style="padding:5px 14px;font-size:10px;background:rgba(255,0,85,.15);border:1px solid #ff0055;color:#ff3366;font-weight:700">🗑️ この楽曲を削除</button>
+          </div>
+        </div>`;
     }
     prev.classList.remove('hid');
   }
@@ -9261,10 +9502,11 @@ const A=(()=>{
     renderTools,selectToolCategory,filterTools,runToolPro,runToolHelp,
     generateBriefingDirect,showLatestBriefing,loadBriefingSchedules,addBriefingSchedule,deleteBriefingSchedule,
     generateImageDirect,generatePhotorealDirect,composeMusicDirect,downloadMediaDirect,
-    loadMediaGallery,filterMediaGallery,previewMediaItem,
+    loadMediaGallery,filterMediaGallery,previewMediaItem,deleteMediaFile,
     openMusicStudio,closeMusicStudio,executeMusicProduce,produceMusicDirect,
-    openImageStudio,closeImageStudio,setStudioMode,handleStudioDrop,handleStudioFiles,removeStudioImage,executeStudioAction,
-    openDressupStudio,loadDressupReferences,selectDressupRef,setDressupPreset,handleDressupFileSelect,executeDressupDirect,createFreshModelDirect,setDressupResultAsNewRef,
+    triggerLyricsFileUpload,handleLyricsFileSelect,loadLyricsFromPath,analyzeLoadedLyrics,
+    openImageStudio,closeImageStudio,setStudioMode,handleStudioDrop,handleStudioFiles,removeStudioImage,executeStudioAction,triggerStudioUpload,
+    openDressupStudio,loadDressupReferences,selectDressupRef,setDressupPreset,handleDressupFileSelect,executeDressupDirect,createFreshModelDirect,setDressupResultAsNewRef,triggerDressupUpload,
     loadClonedSites,createCloneSite,openClonePreview,openClonePreviewDirect,closeClonePreview,
     reloadClonePreview,openClonePreviewNewTab,setClonePreviewDevice,deleteCloneSite,openCloneStudioDirect,
     closeConsole,clearConsole,copyConsole,closeInlineConsole,clearInlineConsole,copyInlineConsole,

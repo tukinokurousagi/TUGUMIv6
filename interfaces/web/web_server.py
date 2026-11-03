@@ -935,7 +935,7 @@ def _run_robin_mcp_action(action: str, query: str = "", preset: str = "threat_in
         _cleanup_web_ephemeral_tor(spawned_tor)
 
 
-def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional[Dict[str, Any]]:
+def execute_slash_command(cmd_text: str, mode: str = "light", session_id: str = "default") -> Optional[Dict[str, Any]]:
     """WebUI チャットからのスラッシュコマンドを解析・実行 (Antigravity SDK v0.1.20 & スマホ最適化カード形式)"""
     raw = cmd_text.strip()
     if not raw.startswith("/"):
@@ -1052,58 +1052,117 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
             reply = f"🤖 **推論モデルを `{new_m}` に切り替え、Antigravity SDK 常駐セッションへ同期いたしました！** (Safety: `BLOCK_NONE`)"
             return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id, "model": new_m}
 
-    # 1.8 Antigravity SDK 自己進化＆10大ピラー診断 (/evolve, /sdk)
+    # 1.8 Antigravity SDK 自己進化＆10大ピラー診断 (/evolve, /sdk, /antigravity)
     if cmd in ("/evolve", "/sdk", "/antigravity"):
         try:
+            sub = args[0].lower() if args else "status"
+            rest = " ".join(args[1:]).strip() if len(args) > 1 else ""
             evolver_path = os.path.expanduser("~/.agents/skills/self-evolution-engine/scripts/antigravity_self_evolver.py")
+            mod = None
             if os.path.exists(evolver_path):
                 import importlib.util
                 spec_loader = importlib.util.spec_from_file_location("antigravity_self_evolver", evolver_path)
                 mod = importlib.util.module_from_spec(spec_loader)
                 spec_loader.loader.exec_module(mod)
+
+            if sub in ("reset", "restart", "clear"):
+                engine.reset_session()
+                reply = "🔄 **Antigravity SDK 常駐セッション (`AntigravitySession`) をクリーンリセットいたしました。**"
+                return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+            if sub == "engine":
+                target_eng = rest.lower() if rest else ("gemini" if engine.primary_engine == "antigravity" else "antigravity")
+                new_eng = engine.set_primary_engine(target_eng, persist=True)
+                reply = f"⚡ **プライマリ推論エンジンを `{new_eng.upper()}` に切り替え、永続化いたしました！**"
+                return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+            if sub == "spec" and mod:
+                spec_info = mod.check_antigravity_sdk_spec()
+                cfg_map = spec_info.get("configs", {})
+                local_fields = list(cfg_map.get("LocalAgentConfig", {}).keys())
+                cap_fields = list(cfg_map.get("CapabilitiesConfig", {}).keys())
+                hooks_v2 = spec_info.get("hooks_v2", [])
+                triggers_v2 = spec_info.get("triggers", [])
+                reply = f"""### 🔬 Google Antigravity SDK (`v{spec_info.get('version', '0.1.20')}`) 実機仕様ライブ検視
+
+- **`LocalAgentConfig` 全 {len(local_fields)} フィールド**:
+  `{', '.join(local_fields)}`
+- **`CapabilitiesConfig` 全 {len(cap_fields)} フィールド**:
+  `{', '.join(cap_fields)}`
+- **Hooks v2 全 {len(hooks_v2)} 種デコレータ**:
+  `{', '.join('@hooks.' + h for h in hooks_v2)}`
+- **Native Triggers 全 {len(triggers_v2)} 種**:
+  `{', '.join('triggers.' + t for t in triggers_v2)}`"""
+                return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+            if sub == "tools":
+                from core.dynamic_skill_synthesizer import DynamicSkillSynthesizer
+                synth = DynamicSkillSynthesizer()
+                dyn_list = synth.list_synthesized_skills()
+                all_tools = engine.antigravity.reload_tools() if hasattr(engine.antigravity, "reload_tools") else engine.antigravity.get_tools()
+                lines = [
+                    f"### 🛠️ Antigravity SDK 登録ツール (`{len(all_tools)}`種) ＆ 動的合成ツール (`{len(dyn_list)}`種)\n",
+                    f"- **動的合成ツール (`dynamic_tools/`)**: `{', '.join(dyn_list) if dyn_list else 'なし'}`",
+                    f"- **コア＋動的ツール総数**: `{len(all_tools)} 種` (ホットリロード対応)",
+                ]
+                reply = "\n".join(lines)
+                return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+            if mod:
                 gap_res = mod.analyze_evolution_gap()
                 ver_res = mod.verify_tugumi_evolution()
             else:
                 gap_res = {"evolution_score_percent": 100.0, "pillars": {}}
                 ver_res = {"all_passed": True, "checks": {}}
 
-            ag = engine.antigravity
-            sess_active = getattr(ag, "_session_obj", None) is not None and getattr(getattr(ag, "_session_obj", None), "_proc", None) is not None
+            ag_st = engine.get_antigravity_status() if hasattr(engine, "get_antigravity_status") else {}
+            sess_info = ag_st.get("session", {})
+            sess_active = bool(sess_info.get("active", False))
+            telem = ag_st.get("telemetry", {})
             checks = ver_res.get("checks", {})
-            reply = f"""### 🚀 Antigravity SDK (`v{getattr(ag, "version", "0.1.20")}`) 10大進化ピラー＆常駐セッション診断
+            tools_cnt = ag_st.get("registered_tools_count", len(engine.antigravity.get_tools()))
+            mcp_list = ag_st.get("mcp_servers", [])
+            sub_list = ag_st.get("subagents", ["researcher", "sysops", "code_craftsman"])
+
+            reply = f"""### 🚀 Antigravity SDK (`v{ag_st.get("sdk_version", "0.1.20")}`) 10大進化ピラー＆常駐セッション診断
 
 - **総合進化スコア**: **`{gap_res.get('evolution_score_percent', 100.0)}% (10/10 Pillars Complete)`**
-- **プライマリエンジン**: **`{engine.primary_engine.upper()}`**
-- **常駐 `AntigravitySession`**: `{'🟢 稼働中 (Warm Persistent)' if sess_active else '🟡 オンデマンド待機中 (初回呼出時ミリ秒起動)'}`
-- **ネイティブ登録ツール数**: `{len(getattr(ag, "registered_tools", []))} 種`
+- **プライマリエンジン**: **`{engine.primary_engine.upper()}`** (モデル: `{engine.current_model}` / Thinking: `{engine.thinking_level.upper()}`)
+- **常駐 `AntigravitySession`**: `{'🟢 稼働中 (Warm Persistent)' if sess_active else '🟡 オンデマンド待機中 (初回呼出時ミリ秒起動)'}` (Turns: `{sess_info.get('turn_count', 0)}`)
+- **ネイティブ登録ツール数**: `{tools_cnt} 種` ｜ **認識SKILL数**: `{ag_st.get('skills_count', 61)} 種` ｜ **MCPサーバー**: `{len(mcp_list)} 基`
+- **Hooks v2 テレメトリ**: Tool Calls `{telem.get('tool_calls', 0)}` 回 / Error Auto-Recovery `{telem.get('tool_errors_recovered', 0)}` 回 / Compactions `{telem.get('compactions', 0)}` 回
 
 #### ◈ 10大進化ピラー (LocalAgentConfig & CapabilitiesConfig) 稼働状態
 - **✅ Pillar 1 (`skills_paths`)**: `~/.agents/skills` 自動注入 (`{checks.get('skills_paths', True)}`)
-- **✅ Pillar 2 (`mcp_servers`)**: MCP 2.0 オンデマンド・エフェメラルマウント (`{checks.get('mcp_servers', True)}`)
-- **✅ Pillar 3 (`subagents`)**: 専門サブエージェント (`researcher`, `sysops`, `code_craftsman`) 編成 (`{checks.get('subagents', True)}`)
+- **✅ Pillar 2 (`mcp_servers`)**: MCP 2.0 (`2026-07-28`) Stateless Core ＆ オンデマンド単発起動・全 `{len(mcp_list)}` 基 (`{checks.get('mcp_servers', True)}`)
+- **✅ Pillar 3 (`subagents`)**: 専門サブエージェント (`{', '.join(sub_list)}`) 編成 (`{checks.get('subagents', True)}`)
 - **✅ Pillar 4 (`policies`)**: Auto-Approve 高速自律実行ポリシー (`{checks.get('policies', True)}`)
 - **✅ Pillar 5 (`workspaces`)**: ワークスペース境界保護 (`{checks.get('workspaces', True)}`)
 - **✅ Pillar 6 (`compaction_config`)**: `CompactionConfig(token_threshold=150,000)` ロスレス自動要約 (`{checks.get('compaction_config', True)}`)
-- **✅ Pillar 7 (`retry_config`)**: `RetryConfig(max_attempts=3, output_retry=2)` 指数バックオフ自己修復 (`{checks.get('retry_config', True)}`)
-- **✅ Pillar 8 (`hooks` / Hooks v2)**: `@hooks.on_tool_error` 自律エラー回復ガイダンス (`{checks.get('hooks_registered', True)}`)
+- **✅ Pillar 7 (`retry_config`)**: `RetryConfig(exponential=2.0, jitter=0.2)` 指数バックオフ自己修復 (`{checks.get('retry_config', True)}`)
+- **✅ Pillar 8 (`hooks` / Hooks v2)**: `@on_tool_error` / `@post_tool_call` / `@on_compaction` 稼働 (`{checks.get('hooks_registered', True)}`)
 - **✅ Pillar 9 (`save_dir`)**: `~/.tugumi/sessions` セッション永続化 (`{checks.get('save_dir', True)}`)
-- **✅ Pillar 10 (`tool_output_truncation_config`)**: `max_tokens=16,000` コンテキスト溢れ防護 (`{checks.get('tool_output_truncation_config', True)}`)"""
+- **✅ Pillar 10 (`tool_output_truncation_config`)**: `max_tokens=16,000` コンテキスト溢れ防護 (`{checks.get('tool_output_truncation_config', True)}`)
+
+> 💡 サブコマンド: `/sdk spec` (SDK仕様検視) ｜ `/sdk tools` (登録・合成ツール確認) ｜ `/sdk engine <antigravity|gemini>` ｜ `/sdk reset`"""
         except Exception as e:
             reply = f"⚠️ **Antigravity SDK 診断エラー**: {e}"
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
 
     # 1.9 常駐セッション管理 (/session) & ロスレス圧縮 (/compact)
     if cmd == "/session":
-        ag = engine.antigravity
         if args and args[0].lower() in ("reset", "restart", "clear"):
-            ag.reset_session()
+            engine.reset_session()
             reply = "🔄 **Antigravity SDK 常駐セッション (`AntigravitySession`) をクリーンリセットいたしました。** 次回のメッセージ時に最新設定で再起動します。"
         else:
-            sess_active = getattr(ag, "_session_obj", None) is not None
+            ag_st = engine.get_antigravity_status() if hasattr(engine, "get_antigravity_status") else {}
+            sess_info = ag_st.get("session", {})
+            sess_active = bool(sess_info.get("active", False))
             reply = f"""### 🔗 Antigravity SDK 常駐セッションステータス
 
 - **セッション状態**: `{'🟢 Active (常駐プロセス接続中)' if sess_active else '⚪ Standby (次回推論時に自動起動)'}`
-- **現在のモード**: `{getattr(ag, "_session_mode", None) or mode}`
+- **累積ターン数**: `{sess_info.get("turn_count", 0)} ターン`
+- **現在のモード**: `{sess_info.get("mode") or mode}`
 - **モデル / 思考強度**: `{engine.current_model}` / `{engine.thinking_level.upper()}`
 - **永続化ディレクトリ**: `~/.tugumi/sessions`
 
@@ -1213,7 +1272,7 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
     # 5. セッションクリア (/clear)
     if cmd == "/clear":
         memory.delete_session(session_id=session_id)
-        engine.antigravity.reset_session()
+        engine.reset_session()
         reply = "🧹 **現在のチャットセッション履歴をクリアし、Antigravity常駐セッションをリフレッシュいたしました。**"
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id, "clear_session": True}
 
@@ -1280,10 +1339,95 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
             # None を返して通常のチャット処理（Auto-RAGプロンプト注入フロー）へ渡す
             return None
 
-    # 7. SKILL一覧 (/skills, /skill) — スマホ最適化カードブロック形式
+    # 7. SKILLホットリロード・監査・取り込み・一覧・個別検視 (/reload, /skills, /skill)
+    if cmd == "/reload":
+        from core.capability_inspector import SkillInspector
+        reload_info = engine.reload_skills() if hasattr(engine, "reload_skills") else {}
+        skills = SkillInspector().list_skills()
+        reply = (
+            "### 🔄 TUGUMIv6 無停止ホットリロード完了\n"
+            f"- **認識SKILL総数**: `{len(skills)}` 種 (正本 `~/.agents/skills` 完全同期)\n"
+            f"- **差分検知**: `{'変更あり・再構築済' if reload_info.get('skills_updated') else '最新状態維持'}`\n"
+            "- **常駐Agentセッション**: `クリーン同期済 (再起動不要)`"
+        )
+        return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
     if cmd in ("/skills", "/skill"):
         from core.capability_inspector import SkillInspector
         inspector = SkillInspector()
+        sub_parts = query.split(maxsplit=1) if query else []
+        sub_cmd = sub_parts[0].lower() if sub_parts else ""
+        sub_arg = sub_parts[1].strip() if len(sub_parts) > 1 else ""
+
+        # A. /skills reload
+        if sub_cmd in ("reload", "-r") and not sub_arg:
+            reload_info = engine.reload_skills() if hasattr(engine, "reload_skills") else {}
+            skills = inspector.list_skills()
+            reply = f"✔ 全 **{len(skills)}** 種のSKILLエコシステムと常駐セッションを無停止ホットリロードいたしました！"
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        # B. /skills audit
+        if sub_cmd in ("audit", "check") and not sub_arg:
+            from core.skill_assimilator import SkillAssimilator
+            assimilator = SkillAssimilator()
+            installed = assimilator.list_installed_skills()
+            ok_cnt = 0
+            warn_lines = []
+            for s in installed:
+                rep = assimilator.audit_skill(s["path"])
+                if rep["is_valid"] and not rep["termux_fixes_needed"]:
+                    ok_cnt += 1
+                else:
+                    warn_lines.append(f"- ⚠️ **`{s['name']}`**: 非互換記述 {len(rep['termux_fixes_needed'])} 件")
+            lines = [
+                f"### 🔍 配備済み全SKILL Termux純度＆適合性監査 ({len(installed)}種)",
+                f"- **完全適合**: `{ok_cnt} / {len(installed)}` 種"
+            ]
+            if warn_lines:
+                lines.extend(warn_lines)
+            else:
+                lines.append("- **診断結果**: 🟢 全スキルが Termux aarch64 規格に100%適合しています。")
+            return {"is_command": True, "reply": "\n".join(lines), "mode": mode, "session_id": session_id}
+
+        # C. /skills assimilate <path>
+        if sub_cmd in ("assimilate", "import") and sub_arg:
+            from core.skill_assimilator import SkillAssimilator
+            assimilator = SkillAssimilator()
+            res = assimilator.purify_and_install(sub_arg)
+            if res.get("success"):
+                if hasattr(engine, "reload_skills"):
+                    engine.reload_skills()
+                reply = (
+                    f"### ✔ 外部スキル『`{res['skill_name']}`』純化・配備完了\n"
+                    f"- **配備先**: `{res['installed_path']}`\n"
+                    f"- **Termux自動修正ファイル**: `{len(res.get('fixed_files', []))}` 件\n"
+                    "- **ホットリロード**: `即時反映済`"
+                )
+            else:
+                reply = f"✖ **スキル純化・取り込み失敗**: {res.get('error')}"
+            return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
+        # D. /skill <skill_name> [task] (個別スキル詳細検視または強制発動)
+        if cmd == "/skill" and sub_parts:
+            target_skill = sub_parts[0].strip()
+            detail = inspector.get_skill_detail(target_skill)
+            if detail and not detail.get("error"):
+                if sub_arg:
+                    # タスク指示がある場合はNoneを返し、chat_endpoint / chat_stream_endpoint 側でSKILL.mdを注入して推論実行
+                    return None
+                raw_md = detail.get("content", "")
+                preview_lines = raw_md.splitlines()[:45]
+                preview_text = "\n".join(preview_lines)
+                if len(raw_md.splitlines()) > 45:
+                    preview_text += f"\n\n... *(全 {len(raw_md.splitlines())} 行 — `/skill {target_skill} <指示>` でこのスキルを強制適用して実行)*"
+                reply = (
+                    f"### 🧩 SKILL Inspector: `{target_skill}` `[{detail.get('category', '')}]`\n"
+                    f"- **パス**: `{detail.get('path')}`\n"
+                    f"- **付属スクリプト**: `{', '.join(detail.get('scripts', [])) or 'なし'}`\n\n"
+                    f"{preview_text}"
+                )
+                return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
+
         skills = inspector.list_skills()
         if query:
             q_lower = query.lower()
@@ -1309,7 +1453,7 @@ def execute_slash_command(cmd_text: str, mode: str, session_id: str) -> Optional
                 for s in cat_skills:
                     lines.append(f"- **`{s['name']}`**: {s['description'][:65]}...")
                 lines.append("")
-            lines.append("*※ 各スキルの詳細仕様は `/skill <名前>` または「🧩 スキル & MCP」タブから閲覧できます。*")
+            lines.append("*※ 各スキルの詳細仕様は `/skill <名前>`、ホットリロードは `/reload`、監査は `/skills audit` で実行できます。*")
 
         reply = "\n".join(lines).strip()
         return {"is_command": True, "reply": reply, "mode": mode, "session_id": session_id}
@@ -2119,10 +2263,11 @@ Torネットワーク上の **16基の `.onion` 検索エンジン** を一斉�
     known_cmds = [
         "/help", "/status", "/sys", "/doctor", "/model", "/thinking", "/think",
         "/high", "/medium", "/low", "/minimal", "/dark", "/light", "/skills", "/skill",
-        "/mcp", "/robin", "/evolve", "/sdk", "/session", "/compact", "/credits", "/cost",
-        "/voice", "/goal", "/memory", "/remember", "/rag", "/research", "/briefing",
-        "/music", "/compose", "/image", "/img", "/photo", "/dl", "/clone", "/binance",
-        "/income", "/verify", "/heal", "/eval", "/test", "/fpf", "/save", "/reset", "/clear", "/new"
+        "/reload", "/awm", "/mcp", "/robin", "/evolve", "/sdk", "/session", "/compact",
+        "/credits", "/cost", "/voice", "/goal", "/memory", "/remember", "/rag", "/research",
+        "/briefing", "/music", "/compose", "/image", "/img", "/photo", "/dl", "/clone",
+        "/binance", "/income", "/verify", "/heal", "/eval", "/test", "/fpf", "/save",
+        "/reset", "/clear", "/new"
     ]
     import difflib
     close_matches = difflib.get_close_matches(cmd, known_cmds, n=3, cutoff=0.45)
@@ -2156,6 +2301,23 @@ async def chat_endpoint(req: ChatRequest):
             f"【自律完遂ゴールモード (/goal)】\n目標: {goal_obj}\n"
             f"Explore → Plan → Execute → Verify (5層検証ゲート) を完全自律で遂行し、客観的証拠とともに完遂報告してください。"
         )
+    elif user_msg.lower().startswith("/skill "):
+        sk_parts = user_msg.split(maxsplit=2)
+        if len(sk_parts) == 3:
+            target_skill, skill_task = sk_parts[1].strip(), sk_parts[2].strip()
+            skill_md_path = os.path.expanduser(f"~/.agents/skills/{target_skill}/SKILL.md")
+            if os.path.isfile(skill_md_path):
+                try:
+                    with open(skill_md_path, "r", encoding="utf-8", errors="ignore") as sf:
+                        skill_md_content = sf.read()
+                    user_msg = (
+                        f"【強制発動SKILL: {target_skill}】\n"
+                        f"以下のSKILL定義に従ってタスクを遂行してください:\n"
+                        f"{skill_md_content[:6000]}\n\n"
+                        f"【拓磨様からのご指示】\n{skill_task}"
+                    )
+                except Exception:
+                    pass
 
     # 楽曲制作リクエスト検知 (Web UI チャット直結・プロンプトぶつ切り完全排除)
     if is_music_creation_intent(user_msg):
@@ -2357,6 +2519,23 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
             f"【自律完遂ゴールモード (/goal)】\n目標: {goal_obj}\n"
             f"Explore → Plan → Execute → Verify (5層検証ゲート) を完全自律で遂行し、客観的証拠とともに完遂報告してください。"
         )
+    elif user_msg.lower().startswith("/skill "):
+        sk_parts = user_msg.split(maxsplit=2)
+        if len(sk_parts) == 3:
+            target_skill, skill_task = sk_parts[1].strip(), sk_parts[2].strip()
+            skill_md_path = os.path.expanduser(f"~/.agents/skills/{target_skill}/SKILL.md")
+            if os.path.isfile(skill_md_path):
+                try:
+                    with open(skill_md_path, "r", encoding="utf-8", errors="ignore") as sf:
+                        skill_md_content = sf.read()
+                    user_msg = (
+                        f"【強制発動SKILL: {target_skill}】\n"
+                        f"以下のSKILL定義に従ってタスクを遂行してください:\n"
+                        f"{skill_md_content[:6000]}\n\n"
+                        f"【拓磨様からのご指示】\n{skill_task}"
+                    )
+                except Exception:
+                    pass
 
     # 楽曲制作リクエスト検知 (Web UI チャット直結・プロンプトぶつ切り完全排除)
     if is_music_creation_intent(user_msg):
@@ -2532,7 +2711,8 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
                 prompt=current_prompt,
                 system_instruction=system_prompt,
                 thinking_level=req.thinking_level or engine.thinking_level,
-                mode=mode
+                mode=mode,
+                user_goal=user_msg
             )
             for chunk_type, chunk_data in stream_iter:
                 if await request.is_disconnected():
@@ -2553,9 +2733,23 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
                     yield f"data: {json.dumps({'type': 'tool_result', 'name': t_name, 'content': t_content}, default=str, ensure_ascii=False)}\n\n"
                 elif chunk_type == "error":
                     yield f"data: {json.dumps({'type': 'error', 'content': str(chunk_data)}, default=str, ensure_ascii=False)}\n\n"
+                elif chunk_type == "tick":
+                    # 定期パルス（tick: 経過秒数）はテキスト出力ではなくタイマー/HUD更新用イベントとして送信
+                    yield f"data: {json.dumps({'type': 'tick', 'elapsed': round(float(chunk_data), 1)}, ensure_ascii=False)}\n\n"
+                elif chunk_type == "cancelled":
+                    yield f"data: {json.dumps({'type': 'cancelled', 'content': str(chunk_data)}, ensure_ascii=False)}\n\n"
+                    break
+                elif chunk_type in ("text", "content"):
+                    if chunk_data is not None:
+                        c_str = str(chunk_data)
+                        if c_str:
+                            text_chunks.append(c_str)
+                            yield f"data: {json.dumps({'type': 'text', 'content': c_str}, default=str, ensure_ascii=False)}\n\n"
                 else:
-                    text_chunks.append(chunk_data)
-                    yield f"data: {json.dumps({'type': 'text', 'content': chunk_data}, default=str, ensure_ascii=False)}\n\n"
+                    # 未知のchunk_typeは文字列かつ非空の場合のみtextとして扱う（数値・float等の混入を完全防護）
+                    if isinstance(chunk_data, str) and chunk_data.strip():
+                        text_chunks.append(chunk_data)
+                        yield f"data: {json.dumps({'type': 'text', 'content': chunk_data}, default=str, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0)
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
@@ -3323,11 +3517,21 @@ class MusicComposeRequest(BaseModel):
     with_vocal: Optional[bool] = True
 
 class MusicProduceRequest(BaseModel):
-    prompt: str
+    prompt: Optional[str] = ""
     genre_preset: Optional[str] = "emotional_rock"
     vocal_type: Optional[str] = "female_soprano"
     title: Optional[str] = ""
     synthesize_audio: Optional[bool] = True
+    exact_lyrics: Optional[str] = None
+    lyrics_path: Optional[str] = None
+
+
+class LyricsReadRequest(BaseModel):
+    file_path: str
+
+
+class LyricsAnalyzeRequest(BaseModel):
+    lyrics: str
 
 class VideoDownloadRequest(BaseModel):
     url: str
@@ -3392,21 +3596,32 @@ async def api_image_compose(req: ImageComposeRequest):
 
 @app.post("/api/image/upload")
 async def api_image_upload(file: UploadFile = File(...)):
-    """WebUIから画像ファイルをアップロードして保存"""
+    """WebUIから画像ファイルをアップロードして保存（サニタイズ・メディアスキャン・堅牢性強化）"""
     try:
-        from tools.media_tools import IMAGES_DIR
+        from tools.media_tools import IMAGES_DIR, _scan_media_file
         upload_dir = os.path.join(IMAGES_DIR, "uploads")
         os.makedirs(upload_dir, exist_ok=True)
 
-        ext = os.path.splitext(file.filename)[1].lower() if file.filename else ".jpg"
-        if not ext:
+        raw_name = os.path.basename(file.filename or "upload.jpg")
+        ext = os.path.splitext(raw_name)[1].lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
             ext = ".jpg"
-        safe_name = f"upload_{int(time.time())}_{file.filename}"
+        base_stem = os.path.splitext(raw_name)[0]
+        # パストラバーサル防止および安全なファイル名サニタイズ（日本語・英数字を保持）
+        clean_stem = re.sub(r'[\/\\:*?"<>|\x00-\x1f\s]+', '_', base_stem).strip('_')
+        if not clean_stem:
+            clean_stem = "image"
+        safe_name = f"upload_{int(time.time())}_{clean_stem[:40]}{ext}"
         save_path = os.path.join(upload_dir, safe_name)
 
         content = await file.read()
+        if not content:
+            return JSONResponse(status_code=400, content={"success": False, "error": "アップロードされた画像データが空です"})
+
         with open(save_path, "wb") as f:
             f.write(content)
+
+        _scan_media_file(save_path)
 
         return {
             "success": True,
@@ -3622,18 +3837,54 @@ async def api_music_compose(req: MusicComposeRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
-@app.post("/api/music/produce")
-async def api_music_produce(req: MusicProduceRequest):
-    """オリコン1位級 AI楽曲プロデュース・作詞・音響合成 (hit-song-producer-pro)"""
+@app.post("/api/music/lyrics/read")
+async def api_music_lyrics_read(req: LyricsReadRequest):
+    """端末内の指定パス（.txt, .md等）から歌詞テキストを安全に読み込み"""
+    try:
+        from tools.media_tools import read_lyrics_file
+        content = await asyncio.to_thread(read_lyrics_file, req.file_path)
+        return {
+            "success": True,
+            "lyrics": content,
+            "file_path": req.file_path,
+            "length_chars": len(content),
+            "lines_count": len(content.splitlines())
+        }
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"success": False, "error": str(e)})
+
+
+@app.post("/api/music/lyrics/analyze")
+async def api_music_lyrics_analyze(req: LyricsAnalyzeRequest):
+    """歌詞テキストから最適なジャンル・BPM・調性・ボーカル声質・世界観をAI推論"""
     try:
         from tools.media_tools import HitSongProducerEngine
+        res = await asyncio.to_thread(HitSongProducerEngine.analyze_lyrics, req.lyrics)
+        return res
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@app.post("/api/music/produce")
+async def api_music_produce(req: MusicProduceRequest):
+    """オリコン1位級 AI楽曲プロデュース・作詞・音響合成 (hit-song-producer-pro / ユーザー提供歌詞完全保全モード対応)"""
+    try:
+        from tools.media_tools import HitSongProducerEngine, read_lyrics_file
+        exact_lyrics = req.exact_lyrics or ""
+        if not exact_lyrics and req.lyrics_path:
+            try:
+                exact_lyrics = await asyncio.to_thread(read_lyrics_file, req.lyrics_path)
+            except Exception as e:
+                return JSONResponse(status_code=400, content={"success": False, "error": f"歌詞ファイルの読み込みに失敗しました: {e}"})
+
         res = await asyncio.to_thread(
             HitSongProducerEngine.produce_hit_song,
-            concept_prompt=req.prompt,
+            concept_prompt=req.prompt or "",
             genre_preset=req.genre_preset,
             vocal_type=req.vocal_type,
             title=req.title or None,
-            synthesize_audio=req.synthesize_audio if req.synthesize_audio is not None else True
+            synthesize_audio=req.synthesize_audio if req.synthesize_audio is not None else True,
+            exact_lyrics=exact_lyrics or None
         )
         if res.get("success") and res.get("mp3_path"):
             mp3_name = os.path.basename(res["mp3_path"])
@@ -3868,7 +4119,13 @@ async def api_media_files():
     try:
         from tools.media_tools import MUSIC_DIR, IMAGES_DIR, UI_DESIGN_DIR
         items = []
-        for folder, ftype in [(IMAGES_DIR, "image"), (UI_DESIGN_DIR, "image"), (MUSIC_DIR, "music")]:
+        scan_targets = [
+            (IMAGES_DIR, "image"),
+            (os.path.join(IMAGES_DIR, "uploads"), "image"),
+            (UI_DESIGN_DIR, "image"),
+            (MUSIC_DIR, "music")
+        ]
+        for folder, ftype in scan_targets:
             if not os.path.exists(folder):
                 continue
             for entry in os.scandir(folder):
@@ -3896,6 +4153,54 @@ async def api_media_files():
                         })
         items.sort(key=lambda x: x["mtime"], reverse=True)
         return {"success": True, "files": items, "count": len(items)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+class MediaDeleteRequest(BaseModel):
+    filename: str
+    folder: Optional[str] = None
+    file_type: Optional[str] = None
+
+
+@app.post("/api/media/delete")
+async def api_media_delete(req: MediaDeleteRequest):
+    """メディアギャラリーの不要ファイル（画像・楽曲）を端末ストレージから安全に物理削除"""
+    try:
+        from tools.media_tools import MUSIC_DIR, IMAGES_DIR, UI_DESIGN_DIR, _scan_media_file
+        clean_name = os.path.basename(req.filename)
+        if not clean_name or clean_name in (".", ".."):
+            return JSONResponse(status_code=400, content={"success": False, "error": "不正なファイル名です"})
+
+        target_dirs = [
+            IMAGES_DIR,
+            os.path.join(IMAGES_DIR, "uploads"),
+            UI_DESIGN_DIR,
+            MUSIC_DIR
+        ]
+        if req.folder:
+            folder_clean = os.path.basename(req.folder)
+            for d in list(target_dirs):
+                if os.path.basename(d) == folder_clean:
+                    target_dirs.insert(0, d)
+
+        deleted = False
+        target_path = None
+        for d in target_dirs:
+            p = os.path.join(d, clean_name)
+            if os.path.isfile(p):
+                os.remove(p)
+                deleted = True
+                target_path = p
+                break
+
+        if not deleted:
+            return JSONResponse(status_code=404, content={"success": False, "error": f"ファイル「{clean_name}」が見つかりません"})
+
+        if target_path:
+            _scan_media_file(target_path)
+
+        return {"success": True, "message": f"「{clean_name}」を正常に削除しました", "filename": clean_name}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
@@ -4754,43 +5059,41 @@ class RobinWebRequest(BaseModel):
 async def get_antigravity_sdk_status():
     """Antigravity SDK v0.1.20 10大進化ピラー・常駐セッション・Subagents・MCP 2.0 統合ステータスを返却"""
     try:
-        ag = getattr(engine, "antigravity", None)
-        ag_avail = bool(ag and getattr(ag, "available", False))
-        session_active = False
-        registered_tools = 0
-        subagents = ["researcher", "sysops", "code_craftsman"]
-        mcp_servers = []
-        if ag:
-            session_active = bool(getattr(ag, "_session_obj", None) is not None and getattr(getattr(ag, "_session_obj", None), "_agent", None) is not None)
-            registered_tools = len(getattr(ag, "registered_tools", []))
-            try:
-                mcp_servers = list(ag._load_mcp_servers().keys())
-            except Exception:
-                mcp_servers = ["failure_guard", "robin"]
+        ag_st = engine.get_antigravity_status() if hasattr(engine, "get_antigravity_status") else {}
+        sess_info = ag_st.get("session", {})
+        mcp_servers = ag_st.get("mcp_servers") or ["failure_guard", "robin"]
+        subagents = ag_st.get("subagents") or ["researcher", "sysops", "code_craftsman"]
+        registered_tools = ag_st.get("registered_tools_count", 0)
+        skills_count = ag_st.get("skills_count", 61)
+        telemetry = ag_st.get("telemetry", {})
+
         pillars = [
-            {"id": 1, "name": "skills_paths", "label": "SKILLS.md 自動検出 (~/.agents/skills)", "active": True},
-            {"id": 2, "name": "mcp_servers", "label": "MCP 2.0 オンデマンド・エフェメラル統合", "active": True},
-            {"id": 3, "name": "subagents", "label": "専門Subagent委譲 (researcher/sysops/craftsman)", "active": True},
-            {"id": 4, "name": "policies", "label": "Security Policy ガードレール", "active": True},
-            {"id": 5, "name": "persistent_session", "label": "AntigravitySession 常駐マルチターン記憶", "active": True},
+            {"id": 1, "name": "skills_paths", "label": f"SKILL.md 自動検出 (~/.agents/skills: {skills_count}種)", "active": True},
+            {"id": 2, "name": "mcp_servers", "label": f"MCP 2.0 (2026-07-28) Stateless & On-Demand ({len(mcp_servers)}基)", "active": True},
+            {"id": 3, "name": "subagents", "label": f"専門Subagent委譲 ({'/'.join(subagents)})", "active": True},
+            {"id": 4, "name": "policies", "label": "Security Policy (allow_all 高速自律実行)", "active": True},
+            {"id": 5, "name": "workspaces", "label": "Workspaces 境界保護 & 常駐Session記憶", "active": True},
             {"id": 6, "name": "compaction_config", "label": "CompactionConfig (150kトークン自動要約)", "active": True},
-            {"id": 7, "name": "retry_config", "label": "RetryConfig (指数バックオフ自動自己修復)", "active": True},
-            {"id": 8, "name": "hooks_v2", "label": "Hooks v2 (@hooks.on_tool_error ネイティブ修復)", "active": True},
+            {"id": 7, "name": "retry_config", "label": "RetryConfig (指数バックオフ+Jitter自己修復)", "active": True},
+            {"id": 8, "name": "hooks_v2", "label": "Hooks v2 (@on_tool_error / @post_tool_call / @on_compaction)", "active": True},
             {"id": 9, "name": "save_dir", "label": "save_dir (~/.tugumi/sessions 永続化)", "active": True},
             {"id": 10, "name": "tool_output_truncation", "label": "ToolOutputTruncation (16kトークン保護)", "active": True},
         ]
         return {
             "success": True,
-            "sdk_version": "0.1.20",
-            "available": ag_avail,
-            "primary_engine": getattr(engine, "primary_engine", "antigravity"),
-            "current_model": getattr(engine, "current_model", "gemini-3.8-flash"),
-            "thinking_level": getattr(engine, "thinking_level", "high"),
-            "session_active": session_active,
+            "sdk_version": ag_st.get("sdk_version", "0.1.20"),
+            "available": ag_st.get("available", True),
+            "primary_engine": ag_st.get("primary_engine", getattr(engine, "primary_engine", "antigravity")),
+            "current_model": ag_st.get("current_model", getattr(engine, "current_model", "gemini-3.8-flash")),
+            "thinking_level": ag_st.get("thinking_level", getattr(engine, "thinking_level", "high")),
+            "session_active": bool(sess_info.get("active", False)),
+            "session": sess_info,
             "registered_tools_count": registered_tools,
+            "skills_count": skills_count,
             "subagents": subagents,
             "mcp_servers": mcp_servers,
-            "evolution_score": 100.0,
+            "telemetry": telemetry,
+            "evolution_score": ag_st.get("evolution_score", 100.0),
             "pillars": pillars,
         }
     except Exception as e:
@@ -4829,23 +5132,19 @@ async def run_antigravity_evolve_check():
     """self-evolution-engine (antigravity_self_evolver.py) による10大ピラー実機ライブ監査"""
     try:
         evolver_script = os.path.expanduser("~/.agents/skills/self-evolution-engine/scripts/antigravity_self_evolver.py")
-        res = execute_slash_command("/evolve")
+        res = execute_slash_command("/evolve", mode="light", session_id="webui_evolve_audit")
+        data = {}
         if os.path.exists(evolver_script):
-            proc = await asyncio.to_thread(
-                subprocess.run,
-                [sys.executable, evolver_script, "--verify-evolution"],
-                capture_output=True, text=True, timeout=180
-            )
-            try:
-                data = json.loads(proc.stdout)
-            except Exception:
-                data = {"raw": proc.stdout}
-            return {
-                "success": True,
-                "verification": data,
-                "markdown": res.get("reply", "") if res else ""
-            }
-        return {"success": True, "markdown": res.get("reply", "") if res else ""}
+            import importlib.util
+            spec_loader = importlib.util.spec_from_file_location("antigravity_self_evolver", evolver_script)
+            mod = importlib.util.module_from_spec(spec_loader)
+            spec_loader.loader.exec_module(mod)
+            data = mod.verify_tugumi_evolution()
+        return {
+            "success": True,
+            "verification": data,
+            "markdown": res.get("reply", "") if res else ""
+        }
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 

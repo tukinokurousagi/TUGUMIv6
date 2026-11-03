@@ -9,6 +9,7 @@ TUGUMIv6 Agent Workflow Memory (AWM) Manager
 
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -30,6 +31,53 @@ except ImportError:
     MemoryDB = None
     AgentWorkflowMemory = None
     TugumiWorkflowLearner = None
+
+
+def extract_clean_user_goal(raw_prompt: str) -> str:
+    """
+    CLI/WebUIのコンテキスト注入ラッパー（長期記憶・対話履歴・RAG・ヘッダー等）を除去し、
+    拓磨様の純粋な最新指示テキストのみを抽出する。
+    """
+    text = (raw_prompt or "").strip()
+    if not text:
+        return ""
+
+    # AWM蒸留プレフィックスの除去
+    if text.startswith("Distill a reusable skill for the goal:"):
+        text = text[len("Distill a reusable skill for the goal:"):].strip()
+
+    # 1. WebUI形式: 「【最新指示】\n...」が末尾にある場合はそこだけ抽出
+    if "【最新指示】" in text:
+        text = text.split("【最新指示】")[-1].strip()
+
+    # 2. CLI形式: 「【マスター拓磨様からの至上指示（最優先・完全遵守要件）】\n...」の先頭ヘッダー除去
+    text = re.sub(
+        r"^【マスター拓磨様からの至上指示[^】]*】\s*",
+        "",
+        text
+    ).strip()
+
+    # 3. 後続に結合されたRAG・対話履歴・長期記憶・実機測定ブロックを切り離す
+    split_markers = (
+        "\n\n【📚 参照RAGナレッジ",
+        "\n\n【自律参照ナレッジベース",
+        "\n\n【参考：直前対話履歴",
+        "\n\n【過去対話コンテキスト",
+        "\n\n【参考：関連長期記憶】",
+        "\n\n【拓磨様の重要設定・絶対方針・コア記憶】",
+        "\n\n【実機測定データ】",
+    )
+    for marker in split_markers:
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+
+    # 万一先頭に長期記憶ブロックだけが残っている場合のフォールバック除去
+    if text.startswith("【拓磨様の重要設定・絶対方針・コア記憶】"):
+        parts = re.split(r"\n{2,}【[^】]+】\n", text)
+        if len(parts) > 1:
+            text = parts[-1].strip()
+
+    return text.strip()
 
 
 class AWMManager:
@@ -59,24 +107,23 @@ class AWMManager:
                 self.enabled = False
 
     def _init_engines(self):
-        """Geminiクライアントが利用可能な場合に AWM & Learner を初期化"""
+        """MemoryDBが利用可能な場合に AWM & Learner を初期化 (Geminiクライアント未指定時もヒューリスティック/ガード動作可能)"""
         if not self.enabled or not self.memory_db:
             return
         client = getattr(self.gemini_client, "sdk_client", None) or self.gemini_client
-        if client:
-            try:
-                self.awm = AgentWorkflowMemory(
-                    memory_db=self.memory_db,
-                    gemini_client=client,
-                    model=self.model
-                )
-                self.learner = TugumiWorkflowLearner(
-                    memory_db=self.memory_db,
-                    gemini_client=client,
-                    model=self.model
-                )
-            except Exception as e:
-                logger.warning(f"[AWMManager] Engine initialization failed: {e}")
+        try:
+            self.awm = AgentWorkflowMemory(
+                memory_db=self.memory_db,
+                gemini_client=client,
+                model=self.model
+            )
+            self.learner = TugumiWorkflowLearner(
+                memory_db=self.memory_db,
+                gemini_client=client,
+                model=self.model
+            )
+        except Exception as e:
+            logger.warning(f"[AWMManager] Engine initialization failed: {e}")
 
     # =========================================================================
     # 1. 多層ノイズ・ゴミデータ蓄積防止フィルター (Multi-Tier Anti-Noise Guard)
@@ -86,8 +133,8 @@ class AWMManager:
         実行軌跡が学習に値するか厳格に判定する多層防護ゲート
         - 些細なタスク、雑談、失敗ログ、空モックを物理遮断
         """
-        # ゲート1: 空・極短ゴール判定
-        goal_clean = (user_goal or "").strip()
+        # ゲート1: ラッパー除去後の空・極短ゴール判定
+        goal_clean = extract_clean_user_goal(user_goal)
         if len(goal_clean) < 6:
             return False, "User goal is too short (< 6 chars)."
 
@@ -110,7 +157,10 @@ class AWMManager:
             return False, "Trajectory contains only failed steps."
 
         # ゲート5: 生コマンド連打スパムチェック
-        tool_names = [s.get("tool_name") or s.get("tool") for s in steps]
+        tool_names = []
+        for s in steps:
+            raw_t = s.get("tool_name") or s.get("tool") or ""
+            tool_names.append(getattr(raw_t, "value", str(raw_t)))
         if len(set(tool_names)) == 1 and tool_names[0] in ("run_command", "execute_bash"):
             # 同一コマンド連打の場合は引数の多様性を確認
             arg_hashes = set()
@@ -120,6 +170,19 @@ class AWMManager:
                 return False, "Trajectory consists of repetitive identical commands."
 
         return True, "Passed all quality filters."
+
+    def should_distill_skill(self, clean_goal: str) -> bool:
+        """
+        ~/.agents/skills/ への新規SKILLパッケージ蒸留を行うべきか判定
+        - 通常の3ステップ作業ごとに勝手なSKILLフォルダが増殖するのを防止
+        - 明示的にスキル化・学習・蒸留を求められた場合のみ ~/.agents/skills/ に生成する
+        """
+        g = (clean_goal or "").lower()
+        skill_triggers = (
+            "/learn", "skillを", "skill化", "スキルを", "スキル化", "スキルとして",
+            "スキル作成", "skill作成", "distill a skill", "create a skill", "スキル蒸留"
+        )
+        return any(t in g for t in skill_triggers)
 
     # =========================================================================
     # 2. 先行ガイダンス注入 (Pre-Execution AWM Guidance Injection)
@@ -132,7 +195,7 @@ class AWMManager:
         if not self.enabled or not self.memory_db:
             return None
 
-        prompt_clean = (user_prompt or "").strip()
+        prompt_clean = extract_clean_user_goal(user_prompt)
         if len(prompt_clean) < 6:
             return None
 
@@ -190,8 +253,9 @@ class AWMManager:
 
         def _worker():
             try:
+                clean_goal = extract_clean_user_goal(user_goal)[:200]
                 # 1. ノイズフィルター
-                worth, reason = self.is_worth_learning(user_goal, steps)
+                worth, reason = self.is_worth_learning(clean_goal, steps)
                 if not worth:
                     logger.debug(f"[AWM Worker] Skipped learning: {reason}")
                     return
@@ -205,7 +269,7 @@ class AWMManager:
                 traj = {
                     "traj_id": session_id,
                     "session_id": session_id,
-                    "user_goal": user_goal,
+                    "user_goal": clean_goal,
                     "steps": steps,
                     "start_time": time.time()
                 }
@@ -217,13 +281,18 @@ class AWMManager:
                     wf_name = workflow.get("workflow_name", "unnamed")
                     logger.info(f"[AWM Worker] Workflow '{wf_name}' saved status: {saved}")
 
-                # 4. SKILLパッケージの自動蒸留 (~/.agents/skills/)
-                result = self.learner.learn_from_text_or_context(
-                    request_text=f"Distill a reusable skill for the goal: {user_goal}",
-                    recent_history=steps[-10:]
-                )
-                if result.get("status") == "success":
-                    logger.info(f"[AWM Worker] Skill distilled: {result.get('skill_name')} -> {result.get('skill_path')}")
+                # 4. 明示的なスキル化要求時のみ SKILLパッケージを自動蒸留 (~/.agents/skills/)
+                # (既存正本スキルの無断上書き禁止 & awm_workflows への重複登録防止)
+                result = {"status": "skipped_by_policy"}
+                if self.should_distill_skill(clean_goal):
+                    result = self.learner.learn_from_text_or_context(
+                        request_text=clean_goal,
+                        recent_history=steps[-10:],
+                        overwrite=False,
+                        save_awm=False
+                    )
+                    if result.get("status") == "success":
+                        logger.info(f"[AWM Worker] Skill distilled: {result.get('skill_name')} -> {result.get('skill_path')}")
 
                 if on_complete:
                     on_complete(workflow, result)

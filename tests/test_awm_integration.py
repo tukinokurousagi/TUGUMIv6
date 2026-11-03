@@ -14,7 +14,7 @@ TUGUMI_DIR = str(Path(__file__).resolve().parent.parent)
 if TUGUMI_DIR not in sys.path:
     sys.path.insert(0, TUGUMI_DIR)
 
-from core.awm_manager import AWMManager
+from core.awm_manager import AWMManager, extract_clean_user_goal
 from core.engine_manager import EngineManager
 
 
@@ -140,3 +140,48 @@ def test_awm_stats_and_purge():
     purged = em.purge_awm_workflows(max_failures=5)
     assert isinstance(purged, int)
     assert purged >= 0
+
+
+def test_extract_clean_user_goal_and_wrapped_noise_guard():
+    """CLI/WebUIラッパー付きプロンプトから純粋な指示のみを抽出し、挨拶・短文ゲートが確実に発火することを検証"""
+    awm = AWMManager()
+    dummy_steps = [
+        {"step_index": 1, "tool_name": "view_file", "success": True},
+        {"step_index": 2, "tool_name": "replace_file_content", "success": True},
+        {"step_index": 3, "tool_name": "run_command", "success": True}
+    ]
+
+    cli_wrapped_trivial = (
+        "【マスター拓磨様からの至上指示（最優先・完全遵守要件）】\n"
+        "こんにちは つぐみ\n\n"
+        "【📚 参照RAGナレッジ（TUGUMI_RAG ローカル確定知識・リファレンス）】\n"
+        "ダミーRAG\n\n"
+        "【参考：関連長期記憶】\nダミー記憶"
+    )
+    assert extract_clean_user_goal(cli_wrapped_trivial) == "こんにちは つぐみ"
+    worth, reason = awm.is_worth_learning(cli_wrapped_trivial, dummy_steps)
+    assert worth is False
+    assert "trivial" in reason.lower()
+
+    webui_wrapped = (
+        "【拓磨様の重要設定・絶対方針・コア記憶】\n設定テキスト\n\n"
+        "【過去対話コンテキスト（ContextCompressor剪定済）】\n履歴テキスト\n\n"
+        "【最新指示】\nセーブデータのチェックサム再計算スクリプトを作成して"
+    )
+    assert extract_clean_user_goal(webui_wrapped) == "セーブデータのチェックサム再計算スクリプトを作成して"
+    worth2, _ = awm.is_worth_learning(webui_wrapped, dummy_steps)
+    assert worth2 is True
+
+
+def test_learner_zero_mock_and_overwrite_protection():
+    """TugumiWorkflowLearnerがLLM未接続時にハリボテ生成せず、既存正本SKILLの上書きを遮断することを検証"""
+    awm = AWMManager()
+    assert awm.learner is not None
+    # 1. LLM client=None 時はハリボテを生成せず skipped を返すこと
+    old_client = awm.learner.client
+    try:
+        awm.learner.client = None
+        res = awm.learner.learn_from_text_or_context("Create a dummy skill")
+        assert res["status"] == "skipped"
+    finally:
+        awm.learner.client = old_client

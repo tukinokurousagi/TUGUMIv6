@@ -7,11 +7,9 @@ TUGUMIv6 Skill Hot Reload & Assimilator Verification Test
 """
 
 import os
-import shutil
 import tempfile
-import pytest
 from core.skill_assimilator import SkillAssimilator
-from interfaces.cli.dynamic_completer import TugumiRichCompleter, load_skills_with_descriptions
+from interfaces.cli.dynamic_completer import TugumiRichCompleter
 
 
 def test_rich_completer_hot_reload():
@@ -88,3 +86,26 @@ def test_anti_slop_gate():
             audit = assimilator.audit_skill(junk_dir)
             assert audit["is_valid"] is False
             assert any("スロップ" in issue for issue in audit["issues"])
+
+
+def test_deep_skill_md_mtime_hot_reload():
+    """親ディレクトリのmtimeが変わらずサブディレクトリ内のSKILL.mdのみが更新された場合も検知することを検証"""
+    import time
+    from core.engine_manager import EngineManager
+
+    with tempfile.TemporaryDirectory() as tmp_skills:
+        s_dir = os.path.join(tmp_skills, "sample-skill")
+        os.makedirs(s_dir, exist_ok=True)
+        md_path = os.path.join(s_dir, "SKILL.md")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write("---\nname: sample-skill\ndescription: v1\n---\n# Sample v1\n")
+
+        em = EngineManager()
+        em._skills_dir = tmp_skills
+        em._last_skills_mtime = em._compute_skills_signature()
+        assert em._check_skills_updated() is False
+
+        # 親フォルダ(tmp_skills)のmtimeは変えず、SKILL.mdのmtimeのみ更新
+        new_time = time.time() + 5.0
+        os.utime(md_path, (new_time, new_time))
+        assert em._check_skills_updated() is True

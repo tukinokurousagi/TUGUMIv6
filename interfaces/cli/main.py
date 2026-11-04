@@ -2974,6 +2974,7 @@ def run_cli():
 
             # 6. 推論 & ストリーミング生成（ESC一時停止・リアルタイムSteering・タイムアウト自律リカバリ対応）
             timeout_recovery_count = 0
+            is_steering_turn = False
             while True:
                 thought_accumulator = []
                 text_accumulator = []
@@ -3001,18 +3002,30 @@ def run_cli():
                         system_instruction=system_prompt,
                         thinking_level=engine.thinking_level,
                         mode=curr_mode,
-                        user_goal=user_input
+                        user_goal=user_input,
+                        is_steering=is_steering_turn
                     )
                     with TaskInterrupter(console) as interrupter:
+                        active_tool_running = False
                         for chunk_type, chunk_data in stream_iter:
                             # 1. ESCキー押下判定（毎0.1s確実に判定）
                             if interrupter.check_esc_pressed():
                                 if status._live.is_started:
                                     status.stop()
+                                if hasattr(engine, "set_paused"):
+                                    engine.set_paused(True)
                                 action, extra_prompt = interrupter.handle_pause(
                                     current_text="".join(text_accumulator),
                                     mode=curr_mode
                                 )
+                                if hasattr(engine, "set_paused"):
+                                    engine.set_paused(False)
+                                pause_dur = getattr(interrupter, "last_pause_duration", 0.0)
+                                if pause_dur > 0:
+                                    start_time += pause_dur
+                                    if first_thought_time is not None:
+                                        first_thought_time += pause_dur
+
                                 if action == "cancel":
                                     is_cancelled = True
                                     restore_terminal_canonical()
@@ -3036,15 +3049,26 @@ def run_cli():
                                     break
                                 # action == "continue": 再開
                                 if not has_started_text:
+                                    if active_tool_running and last_tool_name:
+                                        elapsed_now = max(0.0, time.time() - start_time)
+                                        status.update(
+                                            f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]🔧 ツール [{last_tool_name}] 実行再開・継続中... "
+                                            f"[dim cyan]⏱ {elapsed_now:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                        )
                                     status.start()
 
                             now = time.time()
-                            elapsed = now - start_time
+                            elapsed = max(0.0, now - start_time)
 
                             # 2. 定期パルス（tick）によるリアルタイムタイマー＆推論進捗HUD更新
                             if chunk_type == "tick":
                                 if status._live.is_started:
-                                    if thought_chars > 0:
+                                    if active_tool_running and last_tool_name:
+                                        hud_msg = (
+                                            f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]🔧 ツール [{last_tool_name}] 実行中... "
+                                            f"[dim cyan]⏱ {elapsed:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                        )
+                                    elif thought_chars > 0:
                                         # 思考中（Thinking中）の場合：文字数と生成スピードをリアルタイム表示
                                         th_speed = thought_chars / max(0.1, (now - (first_thought_time or start_time)))
                                         hud_msg = (
@@ -3070,6 +3094,7 @@ def run_cli():
                                 continue
 
                             elif chunk_type == "thought":
+                                active_tool_running = False
                                 if first_thought_time is None:
                                     first_thought_time = now
                                 thought_chars += len(chunk_data)
@@ -3080,6 +3105,8 @@ def run_cli():
                                     thinking_viewer.stream_thought_chunk(chunk_data)
                                 else:
                                     # サクサクモード時でもHUDの文字数カウンターを即座に動的更新！
+                                    if not has_started_text and not status._live.is_started:
+                                        status.start()
                                     if status._live.is_started:
                                         th_speed = thought_chars / max(0.1, (now - first_thought_time))
                                         hud_msg = (
@@ -3097,15 +3124,31 @@ def run_cli():
                                     sys.stdout.write("\n")
                                     sys.stdout.flush()
                                 last_tool_name = getattr(chunk_data, "name", "tool")
+                                active_tool_running = True
                                 inspector.display_tool_start(last_tool_name, getattr(chunk_data, "args", {}))
+                                if not has_started_text:
+                                    status.update(
+                                        f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]🔧 ツール [{last_tool_name}] 実行中... "
+                                        f"[dim cyan]⏱ {elapsed:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                    )
+                                    status.start()
                             elif chunk_type == "tool_result":
+                                active_tool_running = False
                                 thinking_viewer.end_thinking_stream()
+                                if status._live.is_started:
+                                    status.stop()
                                 tool_n = getattr(chunk_data, "name", "tool")
                                 res_val = getattr(chunk_data, "result", None)
                                 err_val = getattr(chunk_data, "error", None)
                                 is_ok = err_val is None
                                 summary_msg = f"Output: {str(res_val)[:80]}..." if res_val is not None else (f"Error: {err_val}" if err_val else "Finished")
                                 inspector.display_tool_result(tool_n, is_ok, summary_msg)
+                                if not has_started_text:
+                                    status.update(
+                                        f"[bold {CYBER_PALETTES[curr_mode]['secondary']}]⚡ [{active_model}] ツール結果解析・推論継続中... "
+                                        f"[dim cyan]⏱ {elapsed:.1f}s[/dim cyan] [dim](ESCで一時停止)[/dim][/bold {CYBER_PALETTES[curr_mode]['secondary']}]"
+                                    )
+                                    status.start()
                             elif chunk_type == "cancelled":
                                 thinking_viewer.end_thinking_stream()
                                 if status._live.is_started:
@@ -3178,6 +3221,7 @@ def run_cli():
                             f"【当初の全体ゴール】:\n{user_input}\n\n"
                             f"【タイムアウト直前の途中経過】:\n{prev_text[:800] if prev_text else '（初期処理中）'}"
                         )
+                        is_steering_turn = True
                         continue
                     else:
                         console.print("\n[bold red]⚠ 連続タイムアウトを検知いたしました。安全のため拓磨様へ制御を委譲いたします。[/bold red]\n")
@@ -3196,17 +3240,20 @@ def run_cli():
                     
                     # セッションは絶対にリセットせず完全維持する（作業記憶・MCP・文脈を破棄しない）
                     # 拓磨様からの軌道修正コマンドとして同一エージェントへ直接注入
+                    interrupted_tool_info = f"（直前に実行中だったツール `{last_tool_name}` は拓磨様により強制中断されました。同一の重いコマンドの再実行は厳禁です）" if last_tool_name else ""
+                    fallback_prev = f"（ツール {last_tool_name or '推論'} 実行段階で中断）"
                     current_prompt = (
                         f"【🚨 マスター拓磨様からの即時・最優先【軌道修正】至上指示】\n"
-                        f"直前の方針・ツール実行内容は的違いであるため、マスター拓磨様により緊急中断されました。\n"
-                        f"これまでの作業文脈・試行結果を保持した上で、以下の拓磨様の修正指示を100%最優先とし、直ちに思考・行動方針を切り替えて当初のタスクを正しく完遂してください。\n\n"
-                        f"【マスター拓磨様からの修正指示（最優先遵守）】:\n"
+                        f"直前の処理{interrupted_tool_info}は、マスター拓磨様によりESC一時停止・軌道修正されました。\n"
+                        f"これまでの作業文脈・試行結果を保持した上で、以下の拓磨様の修正指示・お言葉を100%最優先とし、直ちに思考・行動方針を切り替えて迅速に応答・完遂してください。\n\n"
+                        f"【マスター拓磨様からの修正指示・追加プロンプト（最優先遵守）】:\n"
                         f"{inject_prompt}\n\n"
                         f"【当初の全体ゴール】:\n"
                         f"{user_input}\n\n"
-                        f"【中断された直前の途中内容（参考・反省材料）】:\n"
-                        f"{prev_text[:1000] if prev_text else '（初期推論段階で中断）'}"
+                        f"【中断された直前の途中内容（参考）】:\n"
+                        f"{prev_text[:1000] if prev_text else fallback_prev}"
                     )
+                    is_steering_turn = True
                     continue
 
                 # 正常終了

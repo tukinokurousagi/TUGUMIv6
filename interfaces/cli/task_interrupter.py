@@ -56,6 +56,8 @@ class TaskInterrupter:
     - 安全一時停止: 勝手なサブプロセス皆殺しを廃止し、キャンセル確定時のみ中断
     """
     _global_active_processes: Set[Any] = set()
+    _terminated_pids: Set[int] = set()
+    _is_currently_paused: bool = False
     _active_instance = None
 
     def __init__(self, console: Console):
@@ -66,6 +68,7 @@ class TaskInterrupter:
         self._stop_monitor_event = threading.Event()
         self._monitor_thread: Optional[threading.Thread] = None
         self._cooldown_until: float = 0.0
+        self.last_pause_duration: float = 0.0
 
     @classmethod
     def register_process(cls, proc: Any):
@@ -77,16 +80,93 @@ class TaskInterrupter:
     def unregister_process(cls, proc: Any):
         """完了したサブプロセスを解除"""
         cls._global_active_processes.discard(proc)
+        if proc and hasattr(proc, "pid") and proc.pid:
+            cls._terminated_pids.discard(proc.pid)
+
+    @classmethod
+    def was_terminated(cls, proc: Any) -> bool:
+        """ESCキャンセルまたは軌道修正により強制中断されたプロセスか判定"""
+        if proc and hasattr(proc, "pid") and proc.pid:
+            return proc.pid in cls._terminated_pids
+        return False
+
+    @classmethod
+    def pause_all_active_processes(cls):
+        """一時停止中（TASK PAUSED）は実行中サブプロセスグループ全体にSIGSTOPを送って物理凍結"""
+        cls._is_currently_paused = True
+        if not hasattr(signal, "SIGSTOP"):
+            return
+        for proc in list(cls._global_active_processes):
+            try:
+                if hasattr(proc, "poll") and proc.poll() is None and proc.pid:
+                    try:
+                        pgid = os.getpgid(proc.pid)
+                        os.killpg(pgid, signal.SIGSTOP)
+                    except Exception:
+                        proc.send_signal(signal.SIGSTOP)
+            except Exception:
+                pass
+
+    @classmethod
+    def resume_all_active_processes(cls):
+        """続行（そのままEnter）選択時にサブプロセスグループ全体へSIGCONTを送って物理再開"""
+        cls._is_currently_paused = False
+        if not hasattr(signal, "SIGCONT"):
+            return
+        for proc in list(cls._global_active_processes):
+            try:
+                if hasattr(proc, "poll") and proc.poll() is None and proc.pid:
+                    try:
+                        pgid = os.getpgid(proc.pid)
+                        os.killpg(pgid, signal.SIGCONT)
+                    except Exception:
+                        proc.send_signal(signal.SIGCONT)
+            except Exception:
+                pass
 
     @classmethod
     def terminate_all_active_processes(cls):
-        """登録中の全サブプロセスを即座に安全中断（キャンセル確定時のみ実行）"""
+        """登録中の全サブプロセス（および子孫プロセス群）を即座に完全終了しパイプを即時解放"""
+        cls._is_currently_paused = False
         for proc in list(cls._global_active_processes):
             try:
+                if hasattr(proc, "pid") and proc.pid:
+                    cls._terminated_pids.add(proc.pid)
                 if hasattr(proc, "poll") and proc.poll() is None:
-                    proc.send_signal(signal.SIGINT)
-                    # 応答がなければ即時KILL
-                    threading.Timer(0.3, lambda p=proc: p.kill() if p.poll() is None else None).start()
+                    # 1. SIGSTOP凍結中だった場合に備えてSIGCONTで起こす
+                    if hasattr(signal, "SIGCONT") and proc.pid:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGCONT)
+                        except Exception:
+                            pass
+                    # 2. プロセスグループごとSIGTERM -> SIGKILLで子孫プロセス(node/openclaw/proot等)まで即時殲滅
+                    if proc.pid:
+                        try:
+                            pgid = os.getpgid(proc.pid)
+                            os.killpg(pgid, signal.SIGTERM)
+                        except Exception:
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                        try:
+                            pgid = os.getpgid(proc.pid)
+                            os.killpg(pgid, signal.SIGKILL)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                    else:
+                        proc.kill()
+                # 3. パイプ(stdout/stderr/stdin)を閉じて communicate() のブロックを即時解除
+                for stream_name in ("stdout", "stderr", "stdin"):
+                    st = getattr(proc, stream_name, None)
+                    if st:
+                        try:
+                            st.close()
+                        except Exception:
+                            pass
             except Exception:
                 pass
         cls._global_active_processes.clear()
@@ -166,9 +246,15 @@ class TaskInterrupter:
     def handle_pause(self, current_text: str = "", mode: str = "dark") -> Tuple[str, Optional[str]]:
         """
         ESCが押された際の一時停止ダイアログ。
-        ターミナル設定を標準カノニカルモードに安全復元し、バッファをフラッシュしてから入力を受け付ける。
+        実行中サブプロセスをSIGSTOPで物理凍結し、ターミナル設定を標準カノニカルモードに安全復元してから入力を受け付ける。
         """
         import time
+        pause_start_t = time.time()
+        self.last_pause_duration = 0.0
+
+        # 0. 実行中サブプロセスを一時停止（SIGSTOP）して裏での勝手な進行を防止
+        self.pause_all_active_processes()
+
         # 1. 監視スレッドを停止し、端末を標準モードに完全復元
         self.deactivate()
 
@@ -200,13 +286,18 @@ class TaskInterrupter:
             prompt_symbol = "🌸" if mode == "light" else "⚡"
             user_addition = input(f"追加プロンプト {prompt_symbol} > ").strip()
         except (KeyboardInterrupt, EOFError):
+            self.last_pause_duration = max(0.0, time.time() - pause_start_t)
             self.console.print("\n[yellow]拓磨様、タスクの中断を指示されました。[/yellow]\n")
             self.terminate_all_active_processes()
             self._cooldown_until = time.time() + 1.0
             return "cancel", None
 
+        self.last_pause_duration = max(0.0, time.time() - pause_start_t)
+
         if not user_addition:
             self.console.print("[bold green]▶ 拓磨様、一時停止を解除しタスクを続行いたします。[/bold green]\n")
+            # 凍結していたサブプロセスへSIGCONTを送って物理再開
+            self.resume_all_active_processes()
             # 続行時のみ監視を再開（0.8秒のクールダウンを設けて再開直後の再発火・キー余韻ループを物理遮断）
             self._cooldown_until = time.time() + 0.8
             self._esc_pressed_event.clear()
@@ -223,7 +314,7 @@ class TaskInterrupter:
                 f"[bold white]「{user_addition}」[/bold white]\n"
                 f"[dim]指示をリアルタイムにコンテキストへ注入し、タスクを再開・適応生成いたします...[/dim]\n"
             )
-            # 再生成へ向かうためプロセスは終了
+            # 再生成へ向かうため実行中サブプロセスグループを即座に終了
             self.terminate_all_active_processes()
             self._cooldown_until = time.time() + 1.0
             return "resume", user_addition

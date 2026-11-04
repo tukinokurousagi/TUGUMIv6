@@ -75,6 +75,13 @@ try:
         t_name = getattr(result, "name", None)
         if t_name:
             _SDK_TELEMETRY["last_tool"] = str(t_name)
+        _SDK_TELEMETRY["_tool_completed"] = True
+        active_q = _SDK_TELEMETRY.get("_active_out_q")
+        if active_q is not None:
+            try:
+                active_q.put_nowait(("tool_result", result))
+            except Exception:
+                pass
 
     @agy_hooks.on_compaction
     async def _tugumi_on_compaction_hook(step: Any) -> None:
@@ -666,7 +673,14 @@ class AntigravitySession:
         self.turn_count = 0
         self.created_at = time.time()
         self._cancel_requested = threading.Event()
+        self._is_paused = False
+        self._was_cancelled_last_turn = False
+        self._inflight_tool_call = None
         self._start_worker()
+
+    def set_paused(self, paused: bool):
+        """Sets or clears pause state so timeout timers freeze while Master Takuma is in TASK PAUSED."""
+        self._is_paused = bool(paused)
 
     def _start_worker(self):
         self.active = True
@@ -693,6 +707,67 @@ class AntigravitySession:
                 or "cannot call recv" in msg.lower()
                 or "connection is closed" in msg.lower()
             )
+
+        async def _prepare_agent_for_turn(agent: Any) -> bool:
+            """
+            Ensures the underlying Conversation & LocalConnection are 100% idle and free of
+            stale 'Turn cancelled' exceptions in < 0.1s without restarting the Agent or MCP servers.
+            """
+            try:
+                conv = agent.conversation
+                conn = getattr(conv, "_connection", None)
+                proc = getattr(conn, "_processor", None) if conn else None
+                if conn is None or proc is None:
+                    return True
+
+                # 1. 前のターンがキャンセルされた直後、またはまだ is_idle でない場合のみクリーンアップ
+                if not conn.is_idle or self._was_cancelled_last_turn:
+                    if not conn.is_idle:
+                        try:
+                            from interfaces.cli.task_interrupter import TaskInterrupter
+                            TaskInterrupter.terminate_all_active_processes()
+                        except Exception:
+                            pass
+                        try:
+                            await conv.cancel()
+                        except Exception:
+                            pass
+
+                        # まず0.15秒待つ（非ブロッキング化されたrun_termux_commandなら0.03秒で完了してis_idleになる）
+                        try:
+                            await asyncio.wait_for(proc.is_idle.wait(), timeout=0.15)
+                        except asyncio.TimeoutError:
+                            # もし他のツール呼び出しがまだ応答していない場合、インフライトのtool_callに即座にキャンセル応答を送ってlocalharnessを0.01秒で解放する
+                            inflight_tc = self._inflight_tool_call
+                            if inflight_tc is not None and getattr(inflight_tc, "id", None):
+                                try:
+                                    await proc._send_tool_results([
+                                        agy_types.ToolResult(
+                                            id=inflight_tc.id,
+                                            name=getattr(inflight_tc, "name", "tool"),
+                                            error="Interrupted by Master Takuma via ESC",
+                                        )
+                                    ])
+                                except Exception:
+                                    pass
+                            try:
+                                await asyncio.wait_for(proc.is_idle.wait(), timeout=0.6)
+                            except asyncio.TimeoutError:
+                                # それでも戻らない場合でもセッション再起動(25秒)は避け、強制的にidle状態へリセットして即座に次ターンへ進める
+                                proc.is_idle.set()
+
+                    # 2. step_queue に残留している前ターンの AntigravityExecutionError('Turn cancelled') 等を完全ドレイン
+                    self._inflight_tool_call = None
+                    conn._client_cancelled = False
+                    conn._is_receiving = False
+                    while not proc.step_queue.empty():
+                        try:
+                            proc.step_queue.get_nowait()
+                        except Exception:
+                            break
+                return True
+            except Exception:
+                return True
 
         async def _main():
             self.async_in_q = asyncio.Queue()
@@ -728,6 +803,7 @@ class AntigravitySession:
                                 is_retry = False
 
                             self.current_out_q = out_sync_q
+                            _SDK_TELEMETRY["_active_out_q"] = out_sync_q
                             if not is_retry:
                                 self.turn_count += 1
                             self._cancel_requested.clear()
@@ -738,58 +814,108 @@ class AntigravitySession:
                                 last_tool_call_name = ""
                                 emitted_any = False
                                 try:
+                                    # 前ターンのキャンセル残留状態・デッドロックを事前解消
+                                    is_ready = await _prepare_agent_for_turn(agent)
+                                    if not is_ready:
+                                        reconnect_needed = True
+                                        retry_req = (prompt, out_sync_q, True)
+                                        return
+
+                                    self._was_cancelled_last_turn = False
+                                    _SDK_TELEMETRY["_tool_completed"] = False
                                     # 初回レスポンス到達タイムアウト（120秒）で永久ハングを物理遮断
                                     resp = await asyncio.wait_for(agent.chat(prompt), timeout=120.0)
                                     chunk_iter = resp.chunks.__aiter__()
-                                    while True:
-                                        if self._cancel_requested.is_set():
-                                            try:
-                                                await agent.conversation.cancel()
-                                            except Exception:
-                                                pass
-                                            out_sync_q.put(("cancelled", "Task cancelled"))
-                                            break
-                                        try:
-                                            # ツール実行中はツールの実行完了を待つため360秒、通常チャンク間は180秒
-                                            curr_timeout = 360.0 if waiting_tool_execution else 180.0
-                                            chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=curr_timeout)
-                                        except StopAsyncIteration:
-                                            break
-                                        except asyncio.TimeoutError:
-                                            try:
-                                                await agent.conversation.cancel()
-                                            except Exception:
-                                                pass
-                                            err_msg = (
-                                                f"ツール実行タイムアウト (360秒待機超過: 直前ツール '{last_tool_call_name or '不明'}') - プロセスのハングまたは長期実行を安全遮断しました"
-                                                if waiting_tool_execution
-                                                else "ストリーミングチャンク受信タイムアウト (180秒無通信検知)"
-                                            )
-                                            out_sync_q.put(("error", err_msg))
-                                            break
+                                    idle_elapsed = 0.0
+                                    next_chunk_task = None
+                                    try:
+                                        while True:
+                                            if self._cancel_requested.is_set():
+                                                if next_chunk_task and not next_chunk_task.done():
+                                                    next_chunk_task.cancel()
+                                                try:
+                                                    await agent.conversation.cancel()
+                                                except Exception:
+                                                    pass
+                                                out_sync_q.put(("cancelled", "Task cancelled"))
+                                                break
 
-                                        if self._cancel_requested.is_set():
+                                            if next_chunk_task is None:
+                                                next_chunk_task = asyncio.ensure_future(chunk_iter.__anext__())
+
+                                            done, _ = await asyncio.wait({next_chunk_task}, timeout=2.0)
+                                            if not done:
+                                                if self._cancel_requested.is_set():
+                                                    next_chunk_task.cancel()
+                                                    try:
+                                                        await agent.conversation.cancel()
+                                                    except Exception:
+                                                        pass
+                                                    out_sync_q.put(("cancelled", "Task cancelled"))
+                                                    break
+                                                if _SDK_TELEMETRY.get("_tool_completed"):
+                                                    waiting_tool_execution = False
+                                                    self._inflight_tool_call = None
+                                                    _SDK_TELEMETRY["_tool_completed"] = False
+                                                # ESC一時停止中（TASK PAUSED）はタイマーを加算せず待機継続
+                                                if self._is_paused:
+                                                    continue
+                                                idle_elapsed += 2.0
+                                                max_wait = 360.0 if waiting_tool_execution else 180.0
+                                                if idle_elapsed < max_wait:
+                                                    continue
+                                                next_chunk_task.cancel()
+                                                try:
+                                                    await agent.conversation.cancel()
+                                                except Exception:
+                                                    pass
+                                                err_msg = (
+                                                    f"ツール実行タイムアウト (360秒待機超過: 直前ツール '{last_tool_call_name or '不明'}') - プロセスのハングまたは長期実行を安全遮断しました"
+                                                    if waiting_tool_execution
+                                                    else "ストリーミングチャンク受信タイムアウト (180秒無通信検知)"
+                                                )
+                                                out_sync_q.put(("error", err_msg))
+                                                break
+
                                             try:
-                                                await agent.conversation.cancel()
-                                            except Exception:
-                                                pass
-                                            out_sync_q.put(("cancelled", "Task cancelled"))
-                                            break
-                                        if isinstance(chunk, agy_types.Thought):
-                                            emitted_any = True
-                                            out_sync_q.put(("thought", chunk.text))
-                                        elif isinstance(chunk, agy_types.Text):
-                                            emitted_any = True
-                                            out_sync_q.put(("text", chunk.text))
-                                        elif isinstance(chunk, agy_types.ToolCall):
-                                            emitted_any = True
-                                            waiting_tool_execution = True
-                                            last_tool_call_name = getattr(chunk, "name", "tool")
-                                            out_sync_q.put(("tool_call", chunk))
-                                        elif isinstance(chunk, agy_types.ToolResult):
-                                            emitted_any = True
-                                            waiting_tool_execution = False
-                                            out_sync_q.put(("tool_result", chunk))
+                                                chunk = next_chunk_task.result()
+                                            except StopAsyncIteration:
+                                                break
+                                            finally:
+                                                next_chunk_task = None
+                                            idle_elapsed = 0.0
+
+                                            if self._cancel_requested.is_set():
+                                                try:
+                                                    await agent.conversation.cancel()
+                                                except Exception:
+                                                    pass
+                                                out_sync_q.put(("cancelled", "Task cancelled"))
+                                                break
+                                            if isinstance(chunk, agy_types.Thought):
+                                                emitted_any = True
+                                                waiting_tool_execution = False
+                                                self._inflight_tool_call = None
+                                                out_sync_q.put(("thought", chunk.text))
+                                            elif isinstance(chunk, agy_types.Text):
+                                                emitted_any = True
+                                                waiting_tool_execution = False
+                                                self._inflight_tool_call = None
+                                                out_sync_q.put(("text", chunk.text))
+                                            elif isinstance(chunk, agy_types.ToolCall):
+                                                emitted_any = True
+                                                waiting_tool_execution = True
+                                                self._inflight_tool_call = chunk
+                                                last_tool_call_name = getattr(chunk, "name", "tool")
+                                                out_sync_q.put(("tool_call", chunk))
+                                            elif isinstance(chunk, agy_types.ToolResult):
+                                                emitted_any = True
+                                                waiting_tool_execution = False
+                                                self._inflight_tool_call = None
+                                                out_sync_q.put(("tool_result", chunk))
+                                    finally:
+                                        if next_chunk_task and not next_chunk_task.done():
+                                            next_chunk_task.cancel()
                                 except asyncio.TimeoutError:
                                     try:
                                         await agent.conversation.cancel()
@@ -803,15 +929,18 @@ class AntigravitySession:
                                         pass
                                     out_sync_q.put(("cancelled", "Task cancelled"))
                                 except Exception as e:
-                                    if _is_ws_closed_error(e):
+                                    err_str = str(e)
+                                    if _is_ws_closed_error(e) or ("Turn cancelled" in err_str and not emitted_any and not is_retry):
                                         reconnect_needed = True
                                         if not emitted_any and not is_retry and not self._cancel_requested.is_set():
-                                            # 1チャンクも送出する前にWebSocket切断(1000 OK等)を検知した場合、新規Agentセッションへ透過再接続して自動再試行
+                                            # 1チャンクも送出する前にWebSocket切断または前ターンのTurn cancelled残響を検知した場合、新規Agentへ透過再接続して自動再試行
                                             retry_req = (prompt, out_sync_q, True)
                                             return
-                                    out_sync_q.put(("error", str(e)))
+                                    out_sync_q.put(("error", err_str))
                                 finally:
                                     if retry_req is None:
+                                        if _SDK_TELEMETRY.get("_active_out_q") is out_sync_q:
+                                            _SDK_TELEMETRY["_active_out_q"] = None
                                         out_sync_q.put(("done", None))
 
                             self.current_task = asyncio.create_task(_execute())
@@ -869,8 +998,15 @@ class AntigravitySession:
                     pass
 
     def cancel(self):
-        """Cancels the currently running agent turn safely and unblocks receivers."""
+        """Cancels the currently running agent turn safely and unblocks receivers and child processes."""
         self._cancel_requested.set()
+        self._is_paused = False
+        self._was_cancelled_last_turn = True
+        try:
+            from interfaces.cli.task_interrupter import TaskInterrupter
+            TaskInterrupter.terminate_all_active_processes()
+        except Exception:
+            pass
         if self.loop and self.loop.is_running():
             if self.current_agent:
                 try:
@@ -906,11 +1042,14 @@ class AntigravitySession:
             self._start_worker()
 
         self._cancel_requested.clear()
+        self._is_paused = False
         out_sync_q = queue.Queue()
         self.current_out_q = out_sync_q
         self.loop.call_soon_threadsafe(self.async_in_q.put_nowait, (prompt, out_sync_q))
         start_stream_time = time.time()
         last_chunk_time = start_stream_time
+        paused_accumulated = 0.0
+        last_tick_time = start_stream_time
         try:
             while True:
                 if self._cancel_requested.is_set():
@@ -922,15 +1061,23 @@ class AntigravitySession:
                     if not self.active or not self.thread or not self.thread.is_alive():
                         yield ("error", "Antigravity background worker died unexpectedly")
                         break
-                    # 定期パルス（tick）を上位に返し、タイマー更新およびESCキー捕捉をリアルタイム化
                     now = time.time()
+                    dt = max(0.0, now - last_tick_time)
+                    last_tick_time = now
+                    if self._is_paused:
+                        # 一時停止中はタイムアウトタイマーを凍結
+                        last_chunk_time = now
+                        paused_accumulated += dt
+                        continue
+                    # 定期パルス（tick）を上位に返し、タイマー更新およびESCキー捕捉をリアルタイム化
                     if now - last_chunk_time > 400.0:
                         yield ("error", "Antigravity推論全体タイムアウト (400秒無応答検知・自動保護)")
                         break
-                    yield ("tick", now - start_stream_time)
+                    yield ("tick", max(0.0, (now - start_stream_time) - paused_accumulated))
                     continue
 
                 last_chunk_time = time.time()
+                last_tick_time = last_chunk_time
                 if chunk_type == "done":
                     break
                 elif chunk_type == "cancelled":

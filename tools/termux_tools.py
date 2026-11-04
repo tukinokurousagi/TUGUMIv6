@@ -22,43 +22,133 @@ class TermuxTools:
         self.plus_path = shutil.which("plus") or "/data/data/com.termux/files/home/bin/plus"
 
     def run_termux_command(self, cmd: str, timeout: float = 300.0, cwd: Optional[str] = None) -> Dict[str, Any]:
-        """標準Termuxコマンド実行（ESC割り込み追跡対応）"""
+        """標準Termuxコマンド実行（非ブロッキングselectパイプ監視により、デーモン起動やESC強制中断でも0.01秒で即座に復帰）"""
+        import select
+        import signal
+        import time
         try:
             from interfaces.cli.task_interrupter import TaskInterrupter
         except ImportError:
             TaskInterrupter = None
 
         proc = None
+        out_chunks: list[bytes] = []
+        err_chunks: list[bytes] = []
         try:
             proc = subprocess.Popen(
                 cmd,
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                cwd=cwd
+                cwd=cwd,
+                start_new_session=True
             )
             if TaskInterrupter:
                 TaskInterrupter.register_process(proc)
 
-            stdout, stderr = proc.communicate(timeout=timeout)
+            out_fd = proc.stdout.fileno() if proc.stdout else -1
+            err_fd = proc.stderr.fileno() if proc.stderr else -1
+            open_fds = []
+            for fd in (out_fd, err_fd):
+                if fd >= 0:
+                    try:
+                        os.set_blocking(fd, False)
+                    except Exception:
+                        pass
+                    open_fds.append(fd)
+
+            active_elapsed = 0.0
+            last_loop_t = time.time()
+            exited_at: Optional[float] = None
+
+            while open_fds:
+                now = time.time()
+                dt = max(0.0, now - last_loop_t)
+                last_loop_t = now
+
+                # 1. ESCキャンセル/軌道修正された瞬間（最大0.03秒以内）にパイプEOFを待たず即時脱出！
+                if TaskInterrupter and TaskInterrupter.was_terminated(proc):
+                    break
+
+                # 2. 一時停止中（SIGSTOP中）はタイムアウトタイマーを進めない
+                is_paused = bool(TaskInterrupter and getattr(TaskInterrupter, "_is_currently_paused", False))
+                if not is_paused:
+                    active_elapsed += dt
+                    if active_elapsed >= timeout:
+                        try:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                        return {
+                            "exit_code": -1,
+                            "stdout": b"".join(out_chunks).decode("utf-8", errors="replace"),
+                            "stderr": f"Command timed out ({timeout}s)"
+                        }
+
+                try:
+                    rlist, _, _ = select.select(open_fds, [], [], 0.03)
+                except Exception:
+                    break
+
+                for fd in rlist:
+                    try:
+                        data = os.read(fd, 65536)
+                        if not data:
+                            open_fds.remove(fd)
+                        elif fd == out_fd:
+                            out_chunks.append(data)
+                        else:
+                            err_chunks.append(data)
+                    except BlockingIOError:
+                        pass
+                    except OSError:
+                        if fd in open_fds:
+                            open_fds.remove(fd)
+
+                # 3. 親シェル終了後、バックグラウンド子プロセス(nohup/&等)がFDを握っていても0.08秒無出力なら即完了！
+                if proc.poll() is not None:
+                    if exited_at is None:
+                        exited_at = time.time()
+                    elif not rlist and (time.time() - exited_at) >= 0.08:
+                        break
+
+            stdout_str = b"".join(out_chunks).decode("utf-8", errors="replace")
+            stderr_str = b"".join(err_chunks).decode("utf-8", errors="replace")
+
+            if TaskInterrupter and TaskInterrupter.was_terminated(proc):
+                return {
+                    "exit_code": -15,
+                    "stdout": stdout_str,
+                    "stderr": (stderr_str + "\n[Interrupted by Master Takuma via ESC]").strip()
+                }
+
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=0.2)
+                except Exception:
+                    pass
+
             return {
-                "exit_code": proc.returncode,
-                "stdout": stdout,
-                "stderr": stderr
+                "exit_code": proc.returncode if proc.returncode is not None else 0,
+                "stdout": stdout_str,
+                "stderr": stderr_str
             }
-        except subprocess.TimeoutExpired:
-            if proc:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-            return {"exit_code": -1, "stdout": "", "stderr": f"Command timed out ({timeout}s)"}
         except Exception as e:
             if proc:
                 try:
-                    proc.kill()
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
-                    pass
-            return {"exit_code": -1, "stdout": "", "stderr": str(e)}
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            stdout_str = b"".join(out_chunks).decode("utf-8", errors="replace")
+            if TaskInterrupter and proc and TaskInterrupter.was_terminated(proc):
+                return {"exit_code": -15, "stdout": stdout_str, "stderr": "[Interrupted by Master Takuma via ESC]"}
+            return {"exit_code": -1, "stdout": stdout_str, "stderr": str(e)}
         finally:
             if TaskInterrupter and proc:
                 TaskInterrupter.unregister_process(proc)

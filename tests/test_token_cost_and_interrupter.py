@@ -65,6 +65,58 @@ class TestTaskInterrupter(unittest.TestCase):
             self.assertIsInstance(pressed, bool)
         self.assertFalse(interrupter._is_active)
 
+    def test_process_group_pause_and_resume(self):
+        """サブプロセス実行中にSIGSTOPで一時停止し、SIGCONTで正常再開・完走できることを検証"""
+        import subprocess
+        import time
+        proc = subprocess.Popen(
+            "python3 -c 'import time; time.sleep(0.2); print(\"RESUMED_OK\")'",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True
+        )
+        TaskInterrupter.register_process(proc)
+        try:
+            TaskInterrupter.pause_all_active_processes()
+            time.sleep(0.1)
+            # 一時停止中はまだ終了していないこと
+            self.assertIsNone(proc.poll())
+            # 再開（SIGCONT）
+            TaskInterrupter.resume_all_active_processes()
+            stdout, stderr = proc.communicate(timeout=3.0)
+            self.assertEqual(proc.returncode, 0)
+            self.assertIn("RESUMED_OK", stdout)
+        finally:
+            TaskInterrupter.unregister_process(proc)
+
+    def test_process_group_termination_unblocks_child_pipes(self):
+        """shell=True で孫プロセスがパイプを握っている場合でも terminate_all_active_processes で即座にアンブロックされることを検証"""
+        import threading
+        import time
+        from tools.termux_tools import TermuxTools
+        tt = TermuxTools()
+        result_holder = {}
+
+        def _runner():
+            # 親シェルが別セッション(start_new_session=True)の孫デーモンを起動してパイプFDを保持し続ける最悪ケース
+            result_holder["res"] = tt.run_termux_command(
+                "python3 -c 'import subprocess, time; subprocess.Popen([\"sleep\", \"10\"], start_new_session=True); time.sleep(10)'",
+                timeout=15.0
+            )
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        time.sleep(0.25)
+        start_kill = time.time()
+        TaskInterrupter.terminate_all_active_processes()
+        t.join(timeout=2.0)
+        elapsed_kill = time.time() - start_kill
+        self.assertFalse(t.is_alive(), "Child process pipe blocked run_termux_command() after termination!")
+        self.assertLess(elapsed_kill, 0.25)
+        self.assertEqual(result_holder["res"]["exit_code"], -15)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -340,22 +340,27 @@ class EngineManager:
         system_instruction: Optional[str] = None,
         thinking_level: Optional[str] = None,
         mode: str = "light",
-        user_goal: Optional[str] = None
+        user_goal: Optional[str] = None,
+        is_steering: bool = False
     ) -> Iterator[Tuple[str, Any]]:
         """
         ストリーミング実行 (エラー時に第2・第3エンジンへ勝手に連鎖して3重課金するフォールバックを完全廃止)
         AWM先行ガイダンス注入・Smart Auto-RAG常駐セッション透過注入および非同期バックグラウンド自己学習を透過実行
+        ※ is_steering=True (ESC一時停止からの軌道修正・即時再開時) は、重たいRAG埋め込みAPI再通信やディスクスキャンを完全バイパスし、Antigravity CLI同様に0.01秒で速攻再開する！
         """
         active_level = thinking_level or self.thinking_level
         clean_goal = extract_clean_user_goal(user_goal or prompt)
-        effective_sys_inst, _ = self._inject_awm_guidance(clean_goal, system_instruction)
-        effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
-
-        # 常駐AntigravitySessionは初回生成時のsystem_instructionを保持するため、
-        # 2ターン目以降も最新ターンのRAGコンテキストが確実にAgentへ届くようプロンプト側にも透過注入する
-        effective_prompt = prompt
-        if rag_ctx and rag_ctx[:80] not in effective_prompt and "【📚 参照RAGナレッジ" not in effective_prompt:
-            effective_prompt = f"{effective_prompt}\n\n{rag_ctx}"
+        if is_steering:
+            effective_sys_inst = system_instruction
+            effective_prompt = prompt
+        else:
+            effective_sys_inst, _ = self._inject_awm_guidance(clean_goal, system_instruction)
+            effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
+            # 常駐AntigravitySessionは初回生成時のsystem_instructionを保持するため、
+            # 2ターン目以降も最新ターンのRAGコンテキストが確実にAgentへ届くようプロンプト側にも透過注入する
+            effective_prompt = prompt
+            if rag_ctx and rag_ctx[:80] not in effective_prompt and "【📚 参照RAGナレッジ" not in effective_prompt:
+                effective_prompt = f"{effective_prompt}\n\n{rag_ctx}"
 
         collected_steps: list[dict[str, Any]] = []
         step_idx = 1
@@ -366,7 +371,8 @@ class EngineManager:
                 sess = self.get_or_create_session(
                     system_instruction=effective_sys_inst,
                     thinking_level=active_level,
-                    mode=mode
+                    mode=mode,
+                    fast_reuse=is_steering
                 )
                 if sess:
                     for chunk in sess.chat_stream(effective_prompt):
@@ -436,9 +442,24 @@ class EngineManager:
 
     def cancel_active_task(self):
         """Cancels any running agent turn in the active persistent session."""
+        try:
+            from interfaces.cli.task_interrupter import TaskInterrupter
+            TaskInterrupter.terminate_all_active_processes()
+        except Exception:
+            pass
         if self.session and hasattr(self.session, "cancel"):
             try:
                 self.session.cancel()
+                return True
+            except Exception:
+                pass
+        return False
+
+    def set_paused(self, paused: bool):
+        """Freezes or unfreezes session timeout timers during ESC TASK PAUSED state."""
+        if self.session and hasattr(self.session, "set_paused"):
+            try:
+                self.session.set_paused(paused)
             except Exception:
                 pass
 
@@ -492,11 +513,14 @@ class EngineManager:
         self,
         system_instruction: Optional[str] = None,
         thinking_level: Optional[str] = None,
-        mode: str = "light"
+        mode: str = "light",
+        fast_reuse: bool = False
     ) -> Any:
         """Returns the active persistent AntigravitySession, creating one if not present."""
         if not self.antigravity.is_available():
             return None
+        if fast_reuse and self.session is not None and getattr(self.session, "active", False):
+            return self.session
         active_level = thinking_level or self.thinking_level
         target_model = getattr(self.antigravity, "model", None)
 

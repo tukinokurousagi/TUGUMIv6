@@ -37,44 +37,9 @@ def termux_exec(command: str) -> str:
     Returns:
         JSON string containing exit_code, stdout, and stderr.
     """
-    try:
-        from interfaces.cli.task_interrupter import TaskInterrupter
-    except ImportError:
-        TaskInterrupter = None
-
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        if TaskInterrupter:
-            TaskInterrupter.register_process(proc)
-
-        stdout, stderr = proc.communicate(timeout=300.0)
-        return json.dumps({
-            "exit_code": proc.returncode,
-            "stdout": stdout,
-            "stderr": stderr
-        }, ensure_ascii=False)
-    except subprocess.TimeoutExpired:
-        if proc:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-        return json.dumps({"exit_code": -1, "stdout": "", "stderr": "Command timed out (300s)"})
-    except Exception as e:
-        if proc:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-        return json.dumps({"exit_code": -1, "stdout": "", "stderr": str(e)})
-    finally:
-        if TaskInterrupter and proc:
-            TaskInterrupter.unregister_process(proc)
+    tt = TermuxTools()
+    res = tt.run_termux_command(command, timeout=300.0)
+    return json.dumps(res, ensure_ascii=False)
 
 @default_loop_guard.guard
 def termux_privileged_exec(command: str) -> str:
@@ -85,19 +50,9 @@ def termux_privileged_exec(command: str) -> str:
     Returns:
         JSON string containing exit_code, stdout, stderr, and method_used.
     """
-    rish_path = shutil.which("rish") or "/data/data/com.termux/files/home/bin/rish"
-    su_path = shutil.which("su") or "/data/data/com.termux/files/home/bin/su"
-
-    if os.path.exists(rish_path):
-        res = subprocess.run([rish_path, "-c", command], capture_output=True, text=True, timeout=180.0)
-        if res.returncode == 0:
-            return json.dumps({"exit_code": res.returncode, "stdout": res.stdout, "stderr": res.stderr, "method_used": "rish"}, ensure_ascii=False)
-
-    if os.path.exists(su_path):
-        res = subprocess.run([su_path, "-c", command], capture_output=True, text=True, timeout=180.0)
-        return json.dumps({"exit_code": res.returncode, "stdout": res.stdout, "stderr": res.stderr, "method_used": "su"}, ensure_ascii=False)
-
-    # Fallback to normal termux_exec
+    tt = TermuxTools()
+    res = tt.run_privileged_command(command, method="auto", timeout=180.0)
+    return json.dumps(res, ensure_ascii=False)
     return termux_exec(command)
 
 @default_loop_guard.guard

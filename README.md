@@ -1,4 +1,4 @@
-# TUGUMIv6 (つぐみ v6) - Autonomous Omni AI Agent Architecture
+# 小さな天使つぐみ .ver TUGUMIv6 (つぐみ v6) - Autonomous Omni AI Agent Architecture
 
 <p align="center">
   <img src="docs/assets/tsugumi_thum.png" alt="つぐみ (TUGUMI)" width="360" />

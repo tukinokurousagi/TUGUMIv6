@@ -99,7 +99,9 @@ async def run_scan_command():
             else:
                 sig_disp = "[dim white]HOLD[/dim white]"
 
-            conf_str = f"{int(res['confidence'] * 100)}%"
+            raw_conf = float(res.get("confidence", 0.0))
+            conf_pct = int(raw_conf * 100) if raw_conf <= 1.0 else int(raw_conf)
+            conf_str = f"{conf_pct}%"
             reason_str = " | ".join(res["reasons"])[:40]
 
             table.add_row(symbol, price_str, rsi_formatted, bb_range, sig_disp, conf_str, reason_str)
@@ -178,7 +180,19 @@ async def run_live_trade(symbol: str, action: str = "auto", amount_jpy: float = 
             order_res = await executor.buy_market_jpy(symbol, amount_jpy)
             console.print(Panel(f"約定完了 ID: {order_res.get('orderId')}\nステータス: {order_res.get('status')}\n約定数量: {order_res.get('executedQty')}", title="実発注リザルト", style="green"))
         elif should_sell:
-            console.print("[bold yellow]⚠️ 売りシグナル検知: 手動売却またはポジションクローズ対象です[/bold yellow]")
+            base_asset = symbol[:-3] if symbol.endswith("JPY") else symbol
+            balances = await client.get_spot_balances()
+            holding_qty = float(balances.get(base_asset, {}).get("free", 0.0))
+            if holding_qty > 0:
+                console.print(f"[bold red]⚡ 本番売り注文を発行します: {holding_qty} {base_asset} ({symbol})[/bold red]")
+                order_res = await executor.sell_market(symbol, holding_qty, reason=f"CLI_{action.upper()}_SIGNAL")
+                console.print(Panel(
+                    f"約定完了 ID: {order_res.get('orderId')}\nステータス: {order_res.get('status')}\n売却数量: {order_res.get('executedQty')}\n受取日本円: ¥{float(order_res.get('cummulativeQuoteQty', 0) or 0):,.2f}",
+                    title="実売却リザルト",
+                    style="red"
+                ))
+            else:
+                console.print(f"[bold yellow]⚠️ 売りシグナル検知 ({symbol}): 現在売却可能な {base_asset} 保有残高が 0 のため発注をスキップしました。[/bold yellow]")
         else:
             console.print("[dim]⏸️ シグナルが中立（HOLD）のため見送りました。[/dim]")
 

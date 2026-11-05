@@ -263,6 +263,16 @@ class EngineManager:
                 if os.path.isdir(os.path.join(self._skills_dir, d)) and not d.startswith(".")
             ])
 
+        pillar_checks = [
+            skill_count > 0,
+            len(mcp_names) > 0,
+            len(subagents_list) > 0,
+            len(tools_list) > 0,
+            bool(ag_avail),
+            self.thinking_level in ("high", "medium", "low", "minimal"),
+        ]
+        computed_score = round((sum(1 for ok in pillar_checks if ok) / len(pillar_checks)) * 100.0, 1)
+
         return {
             "available": ag_avail,
             "sdk_version": "0.1.20",
@@ -282,7 +292,7 @@ class EngineManager:
             "subagents": subagents_list,
             "mcp_servers": mcp_names,
             "telemetry": telemetry,
-            "evolution_score": 100.0,
+            "evolution_score": computed_score,
         }
 
     def _inject_awm_guidance(self, prompt: str, system_instruction: Optional[str]) -> Tuple[Optional[str], Optional[str]]:

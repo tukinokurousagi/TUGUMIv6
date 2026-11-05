@@ -3090,6 +3090,7 @@ TOOL_CATEGORIES = {
             {"name": "simplemem_context_optimizer", "desc": "SimpleMem 階層的文脈昇格＆Context Rotガード", "path": "dynamic_tools/simplemem_context_optimizer.py", "icon": "🧠", "requires_args": False, "is_dynamic": True},
             {"name": "tugumi_adaptive_context_ttc_engine", "desc": "TTC推論時思考予算動的算出＆Page-based Cache", "path": "dynamic_tools/tugumi_adaptive_context_ttc_engine.py", "icon": "⚡", "requires_args": False, "is_dynamic": True},
             {"name": "context_engineering_optimizer", "desc": "コンテキストエンジニアリング無劣化圧縮", "path": "dynamic_tools/context_engineering_optimizer.py", "icon": "📊", "requires_args": False, "is_dynamic": True},
+            {"name": "tugumi_context_protocol_engine_2026", "desc": "MCP 2.0 / Google A2A プロトコル＆KVキャッシュ境界最適化", "path": "dynamic_tools/tugumi_context_protocol_engine_2026.py", "icon": "🔌", "requires_args": False, "is_dynamic": True},
             {"name": "termux_resource_inspector", "desc": "Termux/Android システムリソース精密診断", "path": "dynamic_tools/termux_resource_inspector.py", "icon": "📱", "requires_args": False, "is_dynamic": True},
         ],
     },
@@ -4651,13 +4652,16 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
                 q = tool_args.get("query", "").strip()
                 if not q:
                     return {"status": "error", "message": "検索キーワードが空です"}
-                mem_hits = await asyncio.to_thread(memory.recall, q, 4)
-                rag_hits = await asyncio.to_thread(rag.search, q, 3)
+                mem_hits = await asyncio.to_thread(memory.recall_similar, q, 4)
+                rag_hits = await asyncio.to_thread(rag.search_hybrid, q, 3)
                 out_parts = []
                 for m in (mem_hits or []):
-                    out_parts.append(f"[Memory:{m.get('category','')}] {m.get('key','')}: {str(m.get('value',''))[:200]}")
+                    subj = m.get("subject") or m.get("key") or ""
+                    val = m.get("fact_content") or m.get("value") or ""
+                    out_parts.append(f"[Memory:{m.get('category','')}] {subj}: {str(val)[:200]}")
                 for r in (rag_hits or []):
-                    out_parts.append(f"[RAG:{r.get('title','')}] {str(r.get('content',''))[:200]}")
+                    r_txt = r.get("clean_text") or r.get("text") or r.get("content") or ""
+                    out_parts.append(f"[RAG:{r.get('title','')}] {str(r_txt)[:200]}")
                 return {"status": "success", "query": q, "memories": "\n".join(out_parts)[:1200] or "該当する記憶が見つかりませんでした"}
 
             elif tool_name == "generate_creative_media":
@@ -4749,7 +4753,7 @@ async def live_websocket_endpoint(websocket: WebSocket, voice: str = "Aoede", to
             elif tool_name == "generate_daily_briefing":
                 from core.briefing_engine import DailyBriefingEngine
                 b_engine = DailyBriefingEngine()
-                await asyncio.to_thread(b_engine.generate_daily_briefing)
+                await asyncio.to_thread(b_engine.generate_briefing)
                 ev = _get_briefing_evidence()
                 return {"status": "success", "message": "最新デイリーブリーフィングを生成しTUGUMIDeskに保存しました", "weather_and_system": ev[:600]}
 

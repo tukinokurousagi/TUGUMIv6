@@ -479,4 +479,3 @@ class ResearchTools:
 </body>
 </html>"""
         return html
-        return html

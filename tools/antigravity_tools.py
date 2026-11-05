@@ -53,7 +53,6 @@ def termux_privileged_exec(command: str) -> str:
     tt = TermuxTools()
     res = tt.run_privileged_command(command, method="auto", timeout=180.0)
     return json.dumps(res, ensure_ascii=False)
-    return termux_exec(command)
 
 @default_loop_guard.guard
 def get_device_status() -> str:
@@ -287,60 +286,128 @@ def batch_parallel_web_research(topic_or_queries: str, max_sources: int = 5) -> 
 def verify_causal_leverage(premise: str, parties_stakes: str, hypothesis: str) -> str:
     """Mechanical Invariant & Leverage Verification Engine for analysis and hypotheses.
     
-    Validates logical consistency against 3 first-principles invariants:
-    1. Leverage & Survival Invariant: Does the party holding the secret maintain leverage?
-       (If the secret were elsewhere, the adversary has zero rational incentive to keep them alive).
-    2. Adversary Rationality: Is the adversary's behavior game-theoretically optimal under the hypothesis?
-    3. AI Slop / Cliche Detection: Flags hand-waving tropes (e.g. data hidden in amulet, bloodline cliché).
+    Validates logical consistency against 4 general-purpose first-principles invariants:
+    1. Leverage & Single-Point-of-Value Retention Invariant: Does the party under coercion/negotiation
+       maintain exclusive control of the critical asset? (If transferred/delegated away, the adversary
+       loses rational incentive to preserve or bargain with the subject).
+    2. Adversary / Counterparty Incentive Compatibility: Is each actor's behavior rational given their stakes?
+    3. Epistemic Rigor & Anti-Slop Cliche Guard: Flags hand-waving tropes, placeholders, or unverified clichés.
+    4. Stake & Actor Alignment: Extracts actors from `parties_stakes` and verifies structural coverage.
     
     Args:
-        premise: The confirmed factual background (e.g. A is kidnapped and tortured for data X).
-        parties_stakes: The involved factions, their goals, and leverage.
-        hypothesis: The prospective theory or conclusion to stress-test.
+        premise: The confirmed factual background or system state.
+        parties_stakes: The involved actors/factions, their goals, and leverage.
+        hypothesis: The prospective theory, architecture decision, or conclusion to stress-test.
     Returns:
-        JSON string containing evaluation score (0-100), logical flaws, leverage analysis, and recommended verdict.
+        JSON string containing evaluation score (0-100), logical flaws, actor analysis, and recommended verdict.
     """
+    import re as _re
+
     flaws = []
     score = 100
-    
-    hypo_lower = hypothesis.lower()
-    premise_lower = premise.lower()
 
-    # 他者（娘・子供等）にデータや秘密が移譲されていると誤認しているパターンを精密検知
-    transfer_patterns = [
+    hypo_text = (hypothesis or "").strip()
+    premise_text = (premise or "").strip()
+    stakes_text = (parties_stakes or "").strip()
+    hypo_lower = hypo_text.lower()
+    premise_lower = premise_text.lower()
+    combined_context = f"{premise_lower} {stakes_text.lower()}"
+
+    # Actor extraction from parties_stakes (splits by punctuation/delimiters)
+    raw_actors = [
+        _re.sub(r"（.*?）|\(.*?\)", "", tok).strip()
+        for tok in _re.split(r"[、,，・/／\n]+", stakes_text)
+        if tok.strip()
+    ]
+    extracted_actors = [a for a in raw_actors if len(a) >= 2][:10]
+
+    # Invariant 1: Leverage & Survival / Bargaining Power Collapse Detection
+    coercion_or_bargaining_markers = [
+        "拉致", "拷問", "拘束", "人質", "監禁", "脅迫", "交渉", "買収", "独占", "切り札",
+        "ロックイン", "hostage", "coercion", "torture", "leverage", "ransom", "extortion"
+    ]
+    detachment_or_transfer_markers = [
         "娘に託", "子供に託", "子どもに託", "娘に預", "子供に預", "子どもに預",
         "娘に持たせ", "子供に持たせ", "子どもに持たせ", "娘が持っ", "子供が持っ",
-        "娘の中に", "子供の中に", "託されており", "託された"
+        "娘の中に", "子供の中に", "託されており", "託された", "第三者に託", "別人に預",
+        "外部に譲渡", "すでに手放し", "本人は持っていない", "本人は知らない",
+        "transferred to", "delegated to", "already handed over"
     ]
-    if any(k in hypo_lower for k in transfer_patterns):
-        if any(k in premise_lower for k in ["拉致", "拷問", "拘束", "人質", "監禁"]):
+    retention_markers = [
+        "頭の中にしかな", "脳内にしかな", "本人のみ", "本人しか知ら", "記憶の中に",
+        "会えなければ絶対に教えない", "交渉力で生存", "切り札として保持", "独占保持",
+        "only in their head", "sole holder", "retains exclusive"
+    ]
+    if any(k in hypo_lower for k in detachment_or_transfer_markers) and not any(r in hypo_lower for r in retention_markers):
+        if any(k in combined_context for k in coercion_or_bargaining_markers):
             flaws.append({
                 "type": "LEVERAGE_COLLAPSE_RISK",
                 "severity": "CRITICAL",
-                "flaw": "データが本人以外の場所（娘等）にある場合、敵は本人を生かし続ける合理的理由を失う。本人が『娘に会えなければ絶対に教えない』と強気に出られるのは、データが本人の脳内にしかないからこそ成立する絶対的交渉力（レバレッジ）である。"
+                "flaw": (
+                    "交渉または拘束下にある主体から核心資産（機密・データ・切り札）が第三者（娘・外部等）へ完全に切り離されている場合、"
+                    "相手側が本人を生かし続けたり交渉に応じる合理的誘因（インセンティブ）が崩壊します。"
+                    "本人が強気の交渉力を維持できている前提と矛盾するため、資産の排他的保持構造を再検証してください。"
+                ),
             })
             score -= 40
 
-    if any(k in hypo_lower for k in ["身代わり", "記憶喪失", "お守り", "暗号ペンダント"]):
+    # Invariant 2: Counterparty Incentive Contradiction Detection
+    incentive_contradiction_markers = [
+        "理由もなく解放", "無条件で降伏", "無条件で開示", "利益に反して", "ボランティアで",
+        "敵が親切で", "なぜか見逃す", "irrational", "for no reason", "unconditionally"
+    ]
+    if any(k in hypo_lower for k in incentive_contradiction_markers):
+        flaws.append({
+            "type": "INCENTIVE_CONTRADICTION",
+            "severity": "HIGH",
+            "flaw": "当事者・敵対者の合理的利害（ゲーム理論的最適行動）に反する無根拠な行動が仮定されています。",
+        })
+        score -= 30
+
+    # Invariant 3: Epistemic Rigor & AI Slop / Cliche Detection
+    cliche_markers = [
+        "身代わり", "影武者", "記憶喪失", "お守り", "暗号ペンダント", "双子の", "実は夢",
+        "魔法のよう", "奇跡的に", "なんとなく", "適当に", "todo", "tbd"
+    ]
+    if any(k in hypo_lower for k in cliche_markers):
         flaws.append({
             "type": "AI_SLOP_CLICHE",
             "severity": "WARNING",
-            "flaw": "安直なフィクションのステレオタイプ（お守り、形見、身代わり等）に流れている疑いがあります。劇中の物理的描写やセリフの生エビデンスに基づいているか再確認が必要です。"
+            "flaw": (
+                "安直なステレオタイプ・テンプレ展開（お守り、身代わり、影武者、記憶喪失等）または未検証の飛躍が含まれています。"
+                "一次ソースの物理的描写・ログ・事実エビデンスに基づいているか再検証が必要です。"
+            ),
         })
         score -= 25
 
-    # 合理的判定の構築
+    # Invariant 4: Empty or Overly Vague Hypothesis Guard
+    if len(hypo_text) < 10:
+        flaws.append({
+            "type": "INSUFFICIENT_CAUSAL_MECHANISM",
+            "severity": "WARNING",
+            "flaw": "仮説の記述が短すぎ、因果メカニズム（誰が・どの切り札で・どう均衡を維持するか）が具体化されていません。",
+        })
+        score -= 25
+
+    score = max(0, min(100, score))
     verdict = "PASS" if score >= 80 else ("WARNING" if score >= 60 else "FAIL")
     result = {
         "verdict": verdict,
-        "consistency_score": max(score, 0),
+        "consistency_score": score,
         "hypothesis_evaluated": hypothesis,
+        "extracted_actors": extracted_actors,
+        "invariants_checked": [
+            "LEVERAGE_RETENTION_INVARIANT",
+            "COUNTERPARTY_INCENTIVE_COMPATIBILITY",
+            "ANTI_SLOP_CLICHE_GUARD",
+            "CAUSAL_MECHANISM_COMPLETENESS",
+        ],
         "identified_flaws": flaws,
         "first_principles_guidance": (
-            "【第一原理チェック】誰が交渉の主導権（切り札）を握っているか？"
-            "敵にとって最も合理的かつ冷徹な次の一手は何か？"
-            "生本文のセリフ・脚本事実から外れた陳腐なテンプレ作文を完全排除せよ。"
-        )
+            "【第一原理チェック】1. 誰が交渉・システムの主導権（単一障害点／切り札）を握っているか？ "
+            "2. 各プレイヤーにとって最も合理的かつ冷徹な最適戦略は何か？ "
+            "3. 一次エビデンスから外れた陳腐なテンプレ推測を排除できているか？"
+        ),
     }
     return json.dumps(result, ensure_ascii=False, indent=2)
 

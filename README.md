@@ -42,7 +42,14 @@ TUGUMIv6/
 │   ├── termux_tools.py          # Termux特有機能（API/通知/TTS）
 │   ├── git_healer.py            # Git障害自動修復
 │   ├── web_cloner.py            # Webサイト抽出・再構築
-│   └── local_mcp_servers.py     # ローカルMCPサーバー群
+│   ├── donut_tools.py           # Donut Browser & ステルススクレイピング制御
+│   ├── tugumi_defi_sniper.py    # DeFiアービトラージ監視ツール
+│   └── tugumi_mcp.py            # MCP 2.0 ステートレス＆非同期タスクエンジン
+├── passive_income/        # 自律型収益化・制作自動化パイプライン
+│   ├── auto_media_engine.py     # メディア・動画・記事生成パイプライン
+│   ├── freelance_automation.py  # 案件スコアリング・提案書・骨子生成
+│   └── ai_idol_generator.py     # AIアイドルIP・宣材・EPUB3写真集生成
+├── skills/                # 厳選61種専門SKILLパッケージ実体群
 ├── crypto_trader/         # 完全自律暗号資産運用エンジン
 │   ├── analysis_engine.py       # マルチテクニカル・アルファ分析
 │   ├── binance_client.py        # Binance API通信・署名

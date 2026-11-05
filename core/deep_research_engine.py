@@ -694,4 +694,3 @@ class DeepResearchEngine:
 </body>
 </html>"""
         return html
-        return html

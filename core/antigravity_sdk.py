@@ -440,7 +440,7 @@ class AntigravityEngine:
                 env={
                     "MSF_HOST": "127.0.0.1",
                     "MSF_PORT": "55553",
-                    "MSF_PASSWORD": "tugumi_genius",
+                    "MSF_PASSWORD": os.environ.get("MSF_PASSWORD", "tugumi_genius"),
                     "MSF_SSL": "false"
                 }
             ))
@@ -813,6 +813,7 @@ class AntigravitySession:
                                 waiting_tool_execution = False
                                 last_tool_call_name = ""
                                 emitted_any = False
+                                ended_empty = False
                                 try:
                                     # 前ターンのキャンセル残留状態・デッドロックを事前解消
                                     is_ready = await _prepare_agent_for_turn(agent)
@@ -880,6 +881,7 @@ class AntigravitySession:
                                             try:
                                                 chunk = next_chunk_task.result()
                                             except StopAsyncIteration:
+                                                ended_empty = not emitted_any
                                                 break
                                             finally:
                                                 next_chunk_task = None
@@ -916,6 +918,13 @@ class AntigravitySession:
                                     finally:
                                         if next_chunk_task and not next_chunk_task.done():
                                             next_chunk_task.cancel()
+
+                                    # 前ターンのキャンセル残響でストリームが1チャンクも出さずに正常終了した場合
+                                    # (例: MCPロード中のcontext canceled) は、新規Agentへ透過再接続して1回だけ自動再試行
+                                    if ended_empty and not is_retry and not self._cancel_requested.is_set():
+                                        reconnect_needed = True
+                                        retry_req = (prompt, out_sync_q, True)
+                                        return
                                 except asyncio.TimeoutError:
                                     try:
                                         await agent.conversation.cancel()

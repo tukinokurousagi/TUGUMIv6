@@ -441,7 +441,9 @@ def tugumi_simplemem_rot_guard(
         local_skills_dir = os.path.join(TUGUMI_V6_ROOT, "skills")
         os.makedirs(local_skills_dir, exist_ok=True)
 
-        # ~/.agents/skills 内の有効な全スキル (SKILL.md を持つディレクトリ) を絶対正本として認識
+        # ~/.agents/skills 内の有効な全スキル (SKILL.md を持つディレクトリ) を絶対正本として認識し、
+        # GitHub 上でリンク切れにならないよう実ファイルディレクトリとして TUGUMIv6/skills へ同期
+        import shutil
         canonical_skills = set()
         if os.path.exists(global_skills_dir):
             for entry in sorted(os.listdir(global_skills_dir)):
@@ -451,11 +453,17 @@ def tugumi_simplemem_rot_guard(
                 if os.path.isdir(g_path) and os.path.isfile(os.path.join(g_path, "SKILL.md")):
                     canonical_skills.add(entry)
                     l_path = os.path.join(local_skills_dir, entry)
-                    if not os.path.exists(l_path) and not os.path.islink(l_path):
-                        try:
-                            os.symlink(g_path, l_path)
-                        except Exception:
-                            pass
+                    try:
+                        if os.path.islink(l_path):
+                            os.unlink(l_path)
+                        shutil.copytree(
+                            g_path,
+                            l_path,
+                            dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
+                        )
+                    except Exception:
+                        pass
 
         # 正本 (~/.agents/skills) に存在しない壊れたリンクや未承認スキルのみをパージ
         current_entries = [f for f in os.listdir(local_skills_dir) if not f.startswith(".")]

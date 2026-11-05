@@ -317,10 +317,15 @@ class DailyBriefingEngine:
         uptime_s = telemetry.get("system", {}).get("uptime_seconds", 0)
         uptime_h = uptime_s / 3600.0 if uptime_s else 0.0
 
+        bat_temp = bat.get("temperature_c", bat.get("temperature", "N/A"))
+        mem_pct = mem.get("used_pct", mem.get("percent", "N/A"))
+        sto_pct = sto.get("home_used_pct", sto.get("percent", "N/A"))
+        sto_free = sto.get("home_free_gb", sto.get("free_gb", "N/A"))
+
         telemetry_summary = f"""
-・端末バッテリー: 残量 {bat.get('percentage', 'N/A')}% / 温度 {bat.get('temperature', 'N/A')}℃ / 状態 {bat.get('status', 'N/A')}
-・メモリ (RAM): 使用率 {mem.get('percent', 'N/A')}% (空き: {mem.get('available_mb', 'N/A')}MB)
-・ストレージ: 使用率 {sto.get('percent', 'N/A')}% (空き: {sto.get('free_gb', 'N/A')}GB)
+・端末バッテリー: 残量 {bat.get('percentage', 'N/A')}% / 温度 {bat_temp}℃ / 状態 {bat.get('status', 'N/A')}
+・メモリ (RAM): 使用率 {mem_pct}% (空き: {mem.get('available_mb', 'N/A')}MB)
+・ストレージ: 使用率 {sto_pct}% (空き: {sto_free}GB)
 ・システム連続稼働: {uptime_h:.1f} 時間
 ・SQLite記憶DB: WALモード正常稼働
 """
@@ -534,6 +539,9 @@ class DailyBriefingEngine:
             "notify_status": notify_status,
             "content": report_markdown
         }
+
+    # Alias for callers expecting generate_daily_briefing on DailyBriefingEngine
+    generate_daily_briefing = generate_briefing
 
 
 def main():

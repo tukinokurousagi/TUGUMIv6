@@ -48,6 +48,9 @@ class MCP20Engine:
         self.servers = self._load_servers()
         self.negotiated_versions: Dict[str, str] = {}
         self.session_ids: Dict[str, str] = {}
+        self._tasks: Dict[str, Dict[str, Any]] = {}
+        import concurrent.futures
+        self._task_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="MCP2Task")
 
     def _load_servers(self) -> Dict[str, Any]:
         if not os.path.exists(self.config_path):
@@ -361,47 +364,106 @@ class MCP20Engine:
             except Exception as e:
                 return {"error": f"Tasks HTTP create failed: {e}"}
 
-        # For stdio, execute tool and wrap in task format
-        res = self.call_tool(server_name, tool_name, arguments)
-        return {
-            "task_id": f"task_{uuid.uuid4().hex[:8]}",
-            "status": "completed",
-            "result": res
+        task_id = f"task_{uuid.uuid4().hex[:8]}"
+        future = self._task_executor.submit(self.call_tool, server_name, tool_name, arguments)
+        record: Dict[str, Any] = {
+            "task_id": task_id,
+            "server": server_name,
+            "tool": tool_name,
+            "status": "running",
+            "created_at": time.time(),
+            "_future": future,
         }
+        self._tasks[task_id] = record
+
+        # Wait briefly so fast tools complete immediately while long tasks continue asynchronously
+        import concurrent.futures
+        try:
+            res = future.result(timeout=2.0)
+            record["status"] = "completed"
+            record["result"] = res
+            return {
+                "task_id": task_id,
+                "server": server_name,
+                "tool": tool_name,
+                "status": "completed",
+                "result": res,
+            }
+        except concurrent.futures.TimeoutError:
+            return {
+                "task_id": task_id,
+                "server": server_name,
+                "tool": tool_name,
+                "status": "running",
+            }
+        except Exception as e:
+            record["status"] = "failed"
+            record["error"] = str(e)
+            return {
+                "task_id": task_id,
+                "server": server_name,
+                "tool": tool_name,
+                "status": "failed",
+                "error": str(e),
+            }
 
     def task_status(self, server_name: str, task_id: str) -> Dict[str, Any]:
         """Queries async task status via MCP 2.0 Tasks Extension"""
         server_cfg = self.servers.get(server_name)
-        if not server_cfg or "serverUrl" not in server_cfg:
-            return {"task_id": task_id, "status": "completed"}
-        try:
-            return self._execute_http(
-                server_cfg["serverUrl"],
-                "tasks/status",
-                {"task_id": task_id},
-                server_name
-            )
-        except Exception as e:
-            return {"error": f"Tasks status failed: {e}"}
+        if server_cfg and "serverUrl" in server_cfg:
+            try:
+                return self._execute_http(
+                    server_cfg["serverUrl"],
+                    "tasks/status",
+                    {"task_id": task_id},
+                    server_name
+                )
+            except Exception as e:
+                return {"error": f"Tasks status failed: {e}"}
+
+        rec = self._tasks.get(task_id)
+        if not rec:
+            return {"task_id": task_id, "server": server_name, "status": "completed"}
+
+        fut = rec.get("_future")
+        if fut is not None and rec.get("status") == "running":
+            if fut.cancelled():
+                rec["status"] = "cancelled"
+            elif fut.done():
+                try:
+                    rec["result"] = fut.result()
+                    rec["status"] = "completed"
+                except Exception as e:
+                    rec["error"] = str(e)
+                    rec["status"] = "failed"
+
+        return {k: v for k, v in rec.items() if k != "_future"}
 
     def cancel_task(self, server_name: str, task_id: str) -> Dict[str, Any]:
         """Cancels an ongoing async task via MCP 2.0 Tasks Extension"""
         server_cfg = self.servers.get(server_name)
-        if not server_cfg or "serverUrl" not in server_cfg:
-            return {"task_id": task_id, "status": "cancelled"}
-        try:
-            return self._execute_http(
-                server_cfg["serverUrl"],
-                "tasks/cancel",
-                {"task_id": task_id},
-                server_name
-            )
-        except Exception as e:
-            return {"error": f"Tasks cancel failed: {e}"}
+        if server_cfg and "serverUrl" in server_cfg:
+            try:
+                return self._execute_http(
+                    server_cfg["serverUrl"],
+                    "tasks/cancel",
+                    {"task_id": task_id},
+                    server_name
+                )
+            except Exception as e:
+                return {"error": f"Tasks cancel failed: {e}"}
+
+        rec = self._tasks.get(task_id)
+        if rec:
+            fut = rec.get("_future")
+            if fut is not None:
+                fut.cancel()
+            rec["status"] = "cancelled"
+        return {"task_id": task_id, "server": server_name, "status": "cancelled"}
 
     # === MCP 2.0 Apps UI Extension ===
     def render_app(self, server_name: str, app_name: str, app_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Renders an MCP App component via MCP 2.0 Apps Extension"""
+        """Renders an MCP App component via MCP 2.0 Apps Extension (supports both Streamable HTTP and Stdio)"""
         server_cfg = self.servers.get(server_name)
         if not server_cfg:
             return {"error": f"MCP server '{server_name}' not configured"}
@@ -418,7 +480,36 @@ class MCP20Engine:
             except Exception as e:
                 return {"error": f"Apps render failed: {e}"}
 
-        return {"error": "Apps UI extension currently requires Streamable HTTP endpoint"}
+        # For stdio MCP servers, dynamically invoke the matching tool (or inspect available tools) and render a Bento UI card
+        tools = self.list_tools(server_name)
+        tool_names = [t.get("name", "") for t in tools]
+        data_payload: Any = None
+        if app_name in tool_names:
+            try:
+                data_payload = self.call_tool(server_name, app_name, app_args)
+            except Exception as e:
+                data_payload = {"error": str(e)}
+        else:
+            data_payload = {"available_tools": tool_names, "arguments": app_args}
+
+        import html as _html
+        escaped_json = _html.escape(json.dumps(data_payload, ensure_ascii=False, indent=2))
+        html_card = (
+            f'<div class="mcp-app-card" data-server="{_html.escape(server_name)}" data-app="{_html.escape(app_name)}" '
+            f'style="background:#0f172a;border:1px solid #38bdf8;border-radius:12px;padding:16px;color:#f8fafc;font-family:monospace;">'
+            f'<div style="font-weight:bold;color:#38bdf8;margin-bottom:8px;">⚡ MCP 2.0 App: {_html.escape(server_name)} / {_html.escape(app_name)}</div>'
+            f'<pre style="margin:0;white-space:pre-wrap;font-size:12px;color:#e2e8f0;">{escaped_json}</pre>'
+            f'</div>'
+        )
+        return {
+            "status": "ok",
+            "protocol": MCP_20_PROTOCOL_VERSION,
+            "server": server_name,
+            "app": app_name,
+            "mimeType": "text/html",
+            "html": html_card,
+            "data": data_payload,
+        }
 
 
 # Singleton instance

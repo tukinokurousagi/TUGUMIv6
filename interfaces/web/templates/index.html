@@ -6577,7 +6577,7 @@ const A=(()=>{
             <div class="cloned-site-meta">
               <span>🔗 <a href="${esc(s.url)}" target="_blank" rel="noopener" style="color:var(--cyan);text-decoration:none" title="${esc(s.url)}">${esc((s.url || '').substring(0, 35))}${s.url && s.url.length > 35 ? '...' : ''}</a></span>
               <span>💾 ${s.size_kb || 0} KB</span>
-              <span>⚡ ${esc(s.engine || 'auto')}</span>
+              <span>⚡ ${esc(s.engine_label || s.engine || 'auto')}</span>
               <span>🕒 ${esc(s.created_at || '')}</span>
             </div>
           </div>

@@ -66,19 +66,5 @@ class FileTools:
                         pass
         return cleaned
 
-class MCPClient:
-    """MCP 2.0 Client Interface (Stateless & Dynamic Tools)"""
-    def __init__(self, mcp_config_dir: str = "/data/data/com.termux/files/home/.gemini/antigravity-cli/mcp"):
-        self.mcp_config_dir = mcp_config_dir
-        self.available_servers: List[str] = self._discover_servers()
-
-    def _discover_servers(self) -> List[str]:
-        if not os.path.exists(self.mcp_config_dir):
-            return []
-        try:
-            return [d for d in os.listdir(self.mcp_config_dir) if os.path.isdir(os.path.join(self.mcp_config_dir, d))]
-        except Exception:
-            return []
-
-    def get_available_servers(self) -> List[str]:
-        return self.available_servers
+# MCPClient は tools.mcp_client の MCP 2.0 完全実装に一本化（再エクスポート）
+from tools.mcp_client import MCPClient  # noqa: E402,F401

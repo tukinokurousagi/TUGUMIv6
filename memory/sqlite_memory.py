@@ -582,8 +582,14 @@ class SQLiteMemory:
         for item in top_results:
             if "id" in item:
                 self.touch_memory(item["id"])
+            item.setdefault("key", item.get("subject", ""))
+            item.setdefault("value", item.get("fact_content", ""))
 
         return top_results
+
+    def recall(self, query: str, limit: int = 5, tier: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Alias for recall_similar with backward-compatible key/value fields."""
+        return self.recall_similar(query=query, limit=limit, tier=tier)
 
     def decay_all_memories(self) -> int:
         """全記憶のエビングハウス減衰スコアを一括再計算して更新"""

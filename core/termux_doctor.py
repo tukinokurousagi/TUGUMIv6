@@ -75,6 +75,14 @@ class TermuxDoctor:
         except Exception:
             pass
 
+        uptime_seconds = 0.0
+        if os.path.exists("/proc/uptime"):
+            try:
+                with open("/proc/uptime", "r", encoding="utf-8") as uf:
+                    uptime_seconds = float(uf.read().split()[0])
+            except Exception:
+                uptime_seconds = 0.0
+
         return {
             "os": uname.sysname,
             "kernel": uname.release,
@@ -84,7 +92,9 @@ class TermuxDoctor:
             "home": self.home_dir,
             "tmpdir": self.tmp_dir,
             "prefix_exists": os.path.exists(self.prefix_dir),
-            "tmpdir_exists": os.path.exists(self.tmp_dir)
+            "tmpdir_exists": os.path.exists(self.tmp_dir),
+            "uptime_seconds": round(uptime_seconds, 1),
+            "uptime_hours": round(uptime_seconds / 3600.0, 2),
         }
 
     def _inspect_storage(self) -> Dict[str, Any]:
@@ -96,6 +106,8 @@ class TermuxDoctor:
             res["home_free_gb"] = round(home_stat.free / (1024**3), 2)
             res["home_total_gb"] = round(home_stat.total / (1024**3), 2)
             res["home_used_pct"] = round((home_stat.used / home_stat.total) * 100, 1)
+            res["free_gb"] = res["home_free_gb"]
+            res["percent"] = res["home_used_pct"]
         except Exception as e:
             res["home_error"] = str(e)
 
@@ -122,7 +134,7 @@ class TermuxDoctor:
 
     def _inspect_memory(self) -> Dict[str, Any]:
         """RAM および Swap 使用率の把握"""
-        mem_info: Dict[str, Any] = {"total_mb": 0, "available_mb": 0, "used_mb": 0, "used_pct": 0}
+        mem_info: Dict[str, Any] = {"total_mb": 0, "available_mb": 0, "used_mb": 0, "used_pct": 0, "percent": 0}
         if os.path.exists("/proc/meminfo"):
             try:
                 with open("/proc/meminfo", "r") as f:
@@ -140,6 +152,7 @@ class TermuxDoctor:
                 mem_info["available_mb"] = avail
                 mem_info["used_mb"] = used
                 mem_info["used_pct"] = round((used / total * 100) if total else 0, 1)
+                mem_info["percent"] = mem_info["used_pct"]
             except Exception as e:
                 mem_info["error"] = str(e)
         return mem_info
@@ -296,6 +309,7 @@ class TermuxDoctor:
         info: Dict[str, Any] = {
             "percentage": None,
             "temperature_c": None,
+            "temperature": None,
             "status": "UNKNOWN",
             "health": "UNKNOWN",
             "plugged": "UNKNOWN",
@@ -308,6 +322,7 @@ class TermuxDoctor:
                 data = json.loads(r.stdout)
                 info["percentage"] = data.get("percentage")
                 info["temperature_c"] = data.get("temperature")
+                info["temperature"] = info["temperature_c"]
                 info["status"] = data.get("status", "UNKNOWN")
                 info["health"] = data.get("health", "UNKNOWN")
                 info["plugged"] = data.get("plugged", "UNKNOWN")
@@ -328,6 +343,7 @@ class TermuxDoctor:
                             info["percentage"] = int(line.split(":")[1].strip())
                         elif line.startswith("temperature:"):
                             info["temperature_c"] = round(int(line.split(":")[1].strip()) / 10.0, 1)
+                            info["temperature"] = info["temperature_c"]
                         elif line.startswith("status:"):
                             st_map = {"2": "CHARGING", "3": "DISCHARGING", "4": "NOT_CHARGING", "5": "FULL"}
                             val = line.split(":")[1].strip()

@@ -235,30 +235,38 @@ puppeteer.use(StealthPlugin());
 
         t0 = time.time()
         html = ""
-        engine_used = ""
 
-        # Engine Dispatch
-        if engine in ("stealth", "puppeteer", "auto", "donut"):
+        # Engine Dispatch（明示指定されたエンジンを尊重し、auto のみ段階的フォールバック）
+        engine_id = ""
+        engine_label = ""
+        requested = (engine or "auto").lower()
+
+        if requested in ("stealth", "puppeteer", "auto", "donut"):
             try:
                 html = self.clone_with_stealth_puppeteer(
                     url, profile_name=profile_name
                 )
-                engine_used = (
-                    "Stealth Chromium (Puppeteer-Extra Stealth)"
-                )
+                engine_id = "puppeteer" if requested == "puppeteer" else "stealth"
+                engine_label = "Stealth Chromium (Puppeteer-Extra Stealth)"
             except Exception as e:
                 logger.warning("Stealth Puppeteer failed: %s", e)
-                if engine != "auto":
+                if requested != "auto":
+                    raise
+
+        if not html and requested in ("auto", "curl_cffi"):
+            try:
+                html = self.clone_with_curl_cffi(url)
+                engine_id = "curl_cffi"
+                engine_label = "curl_cffi (JA3/JA4 Chrome124 Impersonate)"
+            except Exception as e:  # noqa: BLE001
+                logger.warning("curl_cffi failed: %s", e)
+                if requested == "curl_cffi":
                     raise
 
         if not html:
-            try:
-                html = self.clone_with_curl_cffi(url)
-                engine_used = "curl_cffi (JA3/JA4 Chrome124 Impersonate)"
-            except Exception as e:  # noqa: BLE001
-                logger.warning("curl_cffi failed: %s", e)
-                html = self.clone_with_http(url)
-                engine_used = "HTTP Standard Fallback"
+            html = self.clone_with_http(url)
+            engine_id = "http"
+            engine_label = "HTTP Standard Fallback"
 
         title = self._extract_title(html)
         elapsed = round(time.time() - t0, 2)
@@ -283,7 +291,11 @@ puppeteer.use(StealthPlugin());
             "title": title,
             "created_at": datetime.now().isoformat(),
             "elapsed_sec": elapsed,
-            "engine": engine_used,
+            # 明示的に "puppeteer" 指定された場合は識別子、それ以外は従来どおり説明ラベルを返す
+            "engine": engine_id if engine_id == "puppeteer" else engine_label,
+            "engine_id": engine_id,
+            "engine_label": engine_label,
+            "size_bytes": len(html.encode("utf-8")),
             "size_kb": round(len(html.encode("utf-8")) / 1024, 1),
             "custom_name": custom_name,
             "path": index_file,
@@ -337,6 +349,7 @@ puppeteer.use(StealthPlugin());
                     "url": "N/A",
                     "title": d,
                     "created_at": "",
+                    "size_bytes": os.path.getsize(index_file),
                     "size_kb": round(os.path.getsize(index_file) / 1024, 1),
                     "path": index_file,
                     "engine": "unknown",

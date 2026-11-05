@@ -24,8 +24,13 @@ class AutoMediaEngine:
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def generate_article(self, topic: str, affiliate_tag: str = "tugumi-affiliate-22") -> Dict[str, Any]:
+    def generate_article(self, topic: str, affiliate_url: str = "", affiliate_tag: str = "tugumi-affiliate-22") -> Dict[str, Any]:
         """Gemini 3.8 Flash を駆使してSEOに強い高付加価値記事を自動生成"""
+        ref_line = (
+            f"5. 推奨開発ツール・技術リファレンス紹介セクション (リンク: [{topic} 関連リソース]({affiliate_url}))"
+            if affiliate_url
+            else "5. 推奨開発ツール・公式ドキュメント・関連技術リファレンスの紹介セクション"
+        )
         prompt = f"""
 あなたは最高峰のテックジャーナリストです。
 以下のテーマについて、プロフェッショナルかつ読者が引き込まれる日本語の解説記事（Markdown形式）を作成してください。
@@ -36,7 +41,7 @@ class AutoMediaEngine:
 2. リード文（結論と読者が得られるメリット）
 3. 背景と最新トレンドの解説 (H2)
 4. 実証コード例またはステップバイステップの具体的手順 (H2)
-5. おすすめツールや関連書籍の紹介セクション (アフィリエイト枠: [関連推奨ツール・書籍はこちら](https://example.com/item?tag={affiliate_tag}))
+{ref_line}
 6. まとめと今後の展望 (H2)
 
 モックコードや手抜きは禁止し、実用的なコード例を含めてください。

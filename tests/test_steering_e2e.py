@@ -51,8 +51,9 @@ class TestSteeringE2E(unittest.TestCase):
         for chunk_type, chunk_data in stream2:
             if chunk_type == "text":
                 output_chunks.append(chunk_data)
-            # Timeout guard: must complete within 20s without hanging
-            if time.time() - start_t > 20:
+            # Timeout guard: ESC直後の再開はAgent再接続(全MCP 10台のコールドロード ≒ 実測35〜40秒)を伴い得るため、
+            # 永久ハングしないこと(120秒以内に出力が得られること)を検証する
+            if time.time() - start_t > 120:
                 break
 
         full_output = "".join(output_chunks)

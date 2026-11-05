@@ -229,6 +229,20 @@ class TermuxTools:
         except Exception as e:
             return {"error": f"Vision UI 観察エラー: {e}"}
 
+    def vision_ui_inspect_latest_screenshot(self, query: str = "") -> Dict[str, Any]:
+        """最新のスクリーンショットを自動探索してGemini Visionで解析"""
+        try:
+            from tools.vision_ui_agent import VisionUIAgent
+            agent = VisionUIAgent()
+            return agent.inspect_latest_screenshot(query)
+        except Exception as e:
+            return {"error": f"最新スクショ解析エラー: {e}"}
+
+    def get_latest_screenshot_path(self) -> Optional[str]:
+        """端末内の最新スクリーンショットのパスを取得"""
+        from tools.vision_ui_agent import VisionUIAgent
+        return VisionUIAgent.get_latest_screenshot_path()
+
     def vision_ui_switch_keyboard(self) -> Dict[str, Any]:
         """日本語テンキー（Gboard）の左下隅 [108, 2125] の「あa1」キーをタップ（拓磨様直伝）"""
         try:

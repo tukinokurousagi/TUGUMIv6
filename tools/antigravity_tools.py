@@ -670,6 +670,20 @@ def vision_ui_switch_keyboard() -> str:
     res = tt.vision_ui_switch_keyboard()
     return json.dumps(res, ensure_ascii=False)
 
+@default_loop_guard.guard
+def vision_ui_inspect_latest_screenshot(query: str = "") -> str:
+    """Automatically finds and inspects the latest screenshot taken on the Android device via Gemini Vision.
+    No need to copy/paste file paths; automatically detects the newest screenshot file.
+
+    Args:
+        query: Optional focus query or question regarding the screenshot.
+    Returns:
+        JSON string containing image path, filename, and comprehensive visual analysis.
+    """
+    tt = TermuxTools()
+    res = tt.vision_ui_inspect_latest_screenshot(query)
+    return json.dumps(res, ensure_ascii=False)
+
 # ==================== Workspace & File Tools ====================
 
 @default_loop_guard.guard
@@ -1408,6 +1422,7 @@ def get_tugumi_tools() -> list:
         vision_ui_action,
         vision_ui_inspect,
         vision_ui_switch_keyboard,
+        vision_ui_inspect_latest_screenshot,
         termux_inspect_environment,
         termux_maintain_environment,
         # Memory & Cognitive Retention

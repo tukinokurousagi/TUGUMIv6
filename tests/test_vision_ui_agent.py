@@ -51,3 +51,10 @@ def test_keyboard_switch_knowledge_in_prompt():
     assert "108" in sig
     assert "2125" in sig
     assert "あa1" in sig
+
+def test_get_latest_screenshot_path():
+    latest = VisionUIAgent.get_latest_screenshot_path()
+    # 実機上にスクリーンショットが存在する場合、文字列パスが返ること
+    if latest:
+        assert isinstance(latest, str)
+        assert latest.endswith(".png") or latest.endswith(".jpg")

@@ -6,6 +6,7 @@ Android Termux (Linux aarch64) 上で画面キャプチャと Gemini Vision API 
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -34,6 +35,43 @@ class VisionUIAgent:
         except Exception as e:
             print(f"[VisionUIAgent] スクリーンキャプチャ失敗: {e}", file=sys.stderr)
             return False
+
+    @staticmethod
+    def get_latest_screenshot_path() -> Optional[str]:
+        """端末内のスクリーンショット保存先から最新の画像パスを自動特定"""
+        import glob
+        candidate_dirs = [
+            "/storage/emulated/0/Pictures/Screenshots",
+            "/storage/emulated/0/DCIM/Screenshots",
+            "/sdcard/Pictures/Screenshots",
+            "/sdcard/DCIM/Screenshots"
+        ]
+        files = []
+        for d in candidate_dirs:
+            if os.path.exists(d):
+                files.extend(glob.glob(os.path.join(d, "*.png")) + glob.glob(os.path.join(d, "*.jpg")))
+        if not files:
+            return None
+        return max(files, key=os.path.getmtime)
+
+    def inspect_latest_screenshot(self, query: str = "") -> dict[str, Any]:
+        """最新のスクリーンショットを自動探索してVision解析"""
+        latest_path = self.get_latest_screenshot_path()
+        if not latest_path:
+            return {"error": "スクリーンショットが見つかりませんでした"}
+        
+        prompt = f"""あなたはAndroid端末のスクリーンショットを視覚解析するAIエージェントです。
+画像ファイル: {os.path.basename(latest_path)}
+ユーザーの着眼点: "{query or '画面の状況、表示されている内容、キーやUI要素の詳細'}"
+
+画像を詳しく観察し、日本語で状況や要点を詳細に報告してください。
+"""
+        raw_res = self.client.analyze_image(latest_path, prompt=prompt)
+        return {
+            "image_path": latest_path,
+            "filename": os.path.basename(latest_path),
+            "analysis": raw_res
+        }
 
     def inspect_screen(self, focus_query: str = "") -> dict[str, Any]:
         """現在の画面をキャプチャし、視覚的な要約とUI状態を詳細分析"""

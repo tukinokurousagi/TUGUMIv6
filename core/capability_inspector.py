@@ -172,6 +172,8 @@ MCP_TOOL_JA_DESCRIPTIONS = {
     "tugumi_rag_query": "ローカルドキュメント、リファレンス実装、技術ナレッジを対象に、TUGUMIv6のハイブリッドRAG知識ベースを検索します。",
     "tugumi_music_compose": "Billboard/オリコン1位級 AI楽曲プロデュース・作詞・音響合成 (hit-song-producer-pro SKILL準拠)",
     "tugumi_check_health": "Termux Linux環境およびTUGUMIv6システム全体の包括的な診断・ヘルスチェックを実行します。",
+    "tugumi_vision_ui_action": "Gemini Visionマルチモーダル推論によるAndroid実機画面の自律視覚操作（Screen-to-Action）を実行します。",
+    "tugumi_vision_ui_inspect": "Gemini Visionマルチモーダル推論を用いて、現在のAndroid実機画面の表示内容、アクティブアプリ、キーボード展開状態を詳細に視覚分析・報告します。",
 
     # failure_guard
     "check_failure_risk": "危険な操作や不慣れな作業を実行する前に、過去の失敗教訓・アンチパターン・禁止事項をSQLite FTS5から事前検索します。",

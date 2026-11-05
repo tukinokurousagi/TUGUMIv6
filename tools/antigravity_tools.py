@@ -632,6 +632,44 @@ def android_ui_action(action_type: str, arg1: str = "", arg2: str = "", arg3: st
     res = tt.android_ui_action(action_type, *args)
     return json.dumps(res, ensure_ascii=False)
 
+@default_loop_guard.guard
+def vision_ui_action(instruction: str) -> str:
+    """Performs SOTA multimodal vision-based Android screen automation (Screen-to-Action).
+    Captures screen, analyzes UI state via Gemini Vision, and autonomously taps, types, or switches keyboard.
+
+    Args:
+        instruction: Goal or action instruction (e.g. 'タップしてログインする', '検索バーにキーワードを入力').
+    Returns:
+        JSON string of decision and executed action.
+    """
+    tt = TermuxTools()
+    res = tt.vision_ui_step(instruction)
+    return json.dumps(res, ensure_ascii=False)
+
+@default_loop_guard.guard
+def vision_ui_inspect(focus_query: str = "") -> str:
+    """Visually inspects current Android screen state, active app, and keyboard visibility via Gemini Vision.
+
+    Args:
+        focus_query: Optional specific UI element or context to focus on.
+    Returns:
+        JSON string containing screen summary, visible buttons, and keyboard status.
+    """
+    tt = TermuxTools()
+    res = tt.vision_ui_inspect(focus_query)
+    return json.dumps(res, ensure_ascii=False)
+
+@default_loop_guard.guard
+def vision_ui_switch_keyboard() -> str:
+    """Switches Gboard 12-key keyboard input mode (kana -> alphabet -> number) by tapping the [108, 2125] key.
+
+    Returns:
+        JSON string indicating execution status.
+    """
+    tt = TermuxTools()
+    res = tt.vision_ui_switch_keyboard()
+    return json.dumps(res, ensure_ascii=False)
+
 # ==================== Workspace & File Tools ====================
 
 @default_loop_guard.guard
@@ -1367,6 +1405,9 @@ def get_tugumi_tools() -> list:
         termux_run_command,
         termux_privileged_command,
         android_ui_action,
+        vision_ui_action,
+        vision_ui_inspect,
+        vision_ui_switch_keyboard,
         termux_inspect_environment,
         termux_maintain_environment,
         # Memory & Cognitive Retention

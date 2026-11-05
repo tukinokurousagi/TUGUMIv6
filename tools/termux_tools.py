@@ -211,6 +211,34 @@ class TermuxTools:
 
         return {"exit_code": -1, "stdout": "", "stderr": f"Unsupported action: {action_type}"}
 
+    def vision_ui_step(self, instruction: str) -> Dict[str, Any]:
+        """Gemini Vision によるAndroid画面の視覚認識・自律操作（1ステップ）"""
+        try:
+            from tools.vision_ui_agent import VisionUIAgent
+            agent = VisionUIAgent()
+            return agent.step(instruction)
+        except Exception as e:
+            return {"error": f"Vision UI 操作エラー: {e}", "action": "wait", "is_goal_reached": False}
+
+    def vision_ui_inspect(self, focus_query: str = "") -> Dict[str, Any]:
+        """Gemini Vision による現在のAndroid画面の詳細視覚インスペクト"""
+        try:
+            from tools.vision_ui_agent import VisionUIAgent
+            agent = VisionUIAgent()
+            return agent.inspect_screen(focus_query)
+        except Exception as e:
+            return {"error": f"Vision UI 観察エラー: {e}"}
+
+    def vision_ui_switch_keyboard(self) -> Dict[str, Any]:
+        """日本語テンキー（Gboard）の左下隅 [108, 2125] の「あa1」キーをタップ（拓磨様直伝）"""
+        try:
+            from tools.vision_ui_agent import VisionUIAgent
+            agent = VisionUIAgent()
+            agent.execute_action({"action": "switch_keyboard_mode"})
+            return {"status": "success", "message": "文字種切替キー [108, 2125] をタップしました"}
+        except Exception as e:
+            return {"error": f"キーボード切替失敗: {e}"}
+
     def inspect_environment(self) -> Dict[str, Any]:
         """Termux環境の全レイヤー深層診断（Antigravity CLI水準）"""
         from core.termux_doctor import TermuxDoctor

@@ -2474,6 +2474,26 @@ async def chat_endpoint(req: ChatRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"reply": f"エラー: {e}", "error": str(e)})
 
+_STREAM_END = object()
+
+
+async def _aiter_blocking_stream(stream_iter):
+    """同期ストリーム(next()がブロックする)を asyncio.to_thread で1チャンクずつ非同期に取り出す。
+    セッション生成待ち(最大60秒)や 0.1秒ポーリングでイベントループが塞がり、中断・再開リクエストが
+    処理されなくなるのを防ぐ。"""
+    def _pull():
+        try:
+            return next(stream_iter)
+        except StopIteration:
+            return _STREAM_END
+
+    while True:
+        item = await asyncio.to_thread(_pull)
+        if item is _STREAM_END:
+            return
+        yield item
+
+
 @app.post("/api/chat/cancel")
 async def cancel_chat_endpoint():
     """稼働中のAntigravity SDK / Gemini推論タスクを即座に中断（Kill Switch）"""
@@ -2711,6 +2731,8 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
             yield f"data: {json.dumps({'type': 'rag', 'hits': len(rag_hits), 'titles': [h.get('title') for h in rag_hits]}, ensure_ascii=False)}\n\n"
         if telemetry_rep:
             yield f"data: {json.dumps({'type': 'telemetry', 'score': telemetry_rep.get('health_score', 100), 'status': telemetry_rep.get('status', 'OK')}, ensure_ascii=False)}\n\n"
+        stream_iter = None
+        stream_ctx = None
         try:
             stream_iter = engine.generate_stream(
                 prompt=current_prompt,
@@ -2719,9 +2741,17 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
                 mode=mode,
                 user_goal=user_msg
             )
-            for chunk_type, chunk_data in stream_iter:
+            # 世代付きストリームコンテキスト: 中断(cancel)または新ストリームへの再バインドで失効する
+            stream_ctx = getattr(stream_iter, "ctx", None)
+            # 同期ジェネレータを別スレッドで駆動し、イベントループ（/api/chat/cancel 等）を塞がない
+            async for chunk_type, chunk_data in _aiter_blocking_stream(stream_iter):
+                if stream_ctx is not None and stream_ctx.closed.is_set() and chunk_type != "cancelled":
+                    # 中断済み/新ストリームに置換済みの旧ストリーム: 半開きのまま滞留させず明示的にクローズ
+                    yield f"data: {json.dumps({'type': 'cancelled', 'content': 'stream superseded or cancelled'}, ensure_ascii=False)}\n\n"
+                    break
                 if await request.is_disconnected():
-                    if hasattr(engine, "cancel_active_task"):
+                    # 旧ストリームの切断が、再開後の新ターンを cancel してはならない（最新世代の場合のみ中断）
+                    if hasattr(engine, "cancel_active_task") and (stream_ctx is None or stream_ctx.is_current()):
                         engine.cancel_active_task()
                     break
                 if chunk_type == "thought":
@@ -2756,12 +2786,27 @@ async def chat_stream_endpoint(req: ChatRequest, request: Request):
                         text_chunks.append(chunk_data)
                         yield f"data: {json.dumps({'type': 'text', 'content': chunk_data}, default=str, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0)
+        except (asyncio.CancelledError, GeneratorExit):
+            # クライアント切断等でSSEジェネレータ自体が破棄された場合: 自分が最新世代のときだけ推論を中断
+            if hasattr(engine, "cancel_active_task") and (stream_ctx is None or stream_ctx.is_current()):
+                engine.cancel_active_task()
+            raise
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
+        finally:
+            if stream_iter is not None and hasattr(stream_iter, "close"):
+                try:
+                    stream_iter.close()
+                except Exception:
+                    pass
         full_text = "".join(str(c) for c in text_chunks if c is not None)
         full_thought = "".join(str(c) for c in thought_chunks if c is not None)
         if full_text:
-            memory.add_message("assistant", full_text, mode=mode, session_id=session_id)
+            try:
+                # SQLite書込でイベントループを塞がない（DBロック待ち中も /api/chat/cancel を受け付ける）
+                await asyncio.to_thread(memory.add_message, "assistant", full_text, mode=mode, session_id=session_id)
+            except Exception as mem_err:
+                yield f"data: {json.dumps({'type': 'error', 'content': f'記憶保存エラー: {mem_err}'}, ensure_ascii=False)}\n\n"
         token_tracker.record_turn(prompt_text=current_prompt, response_text=full_text, thought_text=full_thought)
         cost_info = {
             'type': 'cost', 'turn_tokens': token_tracker.last_turn_tokens,
@@ -4155,6 +4200,30 @@ async def api_get_skill_detail(skill_name: str):
         if not detail:
             return JSONResponse(status_code=404, content={"status": "error", "success": False, "error": "Skill not found"})
         return {"status": "ok", "success": True, "skill": detail}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "success": False, "error": str(e)})
+
+class SubagentRunRequest(BaseModel):
+    name: str
+    prompt: str
+
+@app.get("/api/subagents")
+async def api_list_subagents():
+    """TUGUMIv6 専門サブエージェント編成一覧取得"""
+    try:
+        from core.subagents import list_subagents_info
+        subagents = await asyncio.to_thread(list_subagents_info)
+        return {"status": "ok", "success": True, "subagents": subagents}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "success": False, "error": str(e)})
+
+@app.post("/api/subagents/run")
+async def api_run_subagent(req: SubagentRunRequest):
+    """指定サブエージェント直接単独実行"""
+    try:
+        from core.subagents import execute_subagent_task
+        res = await asyncio.to_thread(execute_subagent_task, req.name.strip(), req.prompt.strip())
+        return {"status": "ok", "success": res.get("success", False), "data": res}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "success": False, "error": str(e)})
 

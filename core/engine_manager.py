@@ -10,12 +10,49 @@ import json
 import logging
 import os
 import time
+import weakref
 from typing import Dict, Any, Optional, Iterator, Tuple
 from .gemini_client import GeminiClient, _resolve_gemini_api_key
 from .antigravity_sdk import AntigravityEngine
 from .awm_manager import AWMManager, extract_clean_user_goal
+from .supervisor import default_task_state
 
 logger = logging.getLogger(__name__)
+
+class ManagedStream:
+    """ストリーム生成器のラッパー。世代付き StreamContext を公開し、終了/close 時に必ず end_turn する。
+
+    - ctx: SSE/CLI 側が「自分のストリームが最新世代か」を判定するために使う（旧ストリームの後始末が新ターンを壊さない）
+    - close(): 実行中でも安全（別スレッドで next() 実行中の ValueError は握り潰す）
+    """
+    def __init__(self, inner: Iterator[Tuple[str, Any]], ctx: Any):
+        self._inner = inner
+        self.ctx = ctx
+        self._finished = False
+
+    def __iter__(self) -> "ManagedStream":
+        return self
+
+    def __next__(self) -> Tuple[str, Any]:
+        try:
+            return next(self._inner)
+        except BaseException:
+            self._finish()
+            raise
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        try:
+            self._inner.close()
+        except Exception:
+            pass
+        default_task_state.end_turn(self.ctx)
+
+    def close(self) -> None:
+        self._finish()
+
 
 class EngineManager:
     """Master Engine Dispatcher with Native Antigravity SDK Core"""
@@ -43,6 +80,15 @@ class EngineManager:
         self.thinking_level = self.config.get("thinking_level", "high")
         self.gemini.set_thinking_level(self.thinking_level)
         self.session = None
+        # 中断/再開時に旧ワーカー要求キューをフラッシュするフックを共有ステートマシンへ登録（弱参照で寿命を延ばさない）
+        _self_ref = weakref.ref(self)
+
+        def _flush_hook() -> None:
+            mgr = _self_ref()
+            if mgr is not None:
+                mgr._flush_session_queues()
+
+        default_task_state.register_flush_hook(_flush_hook)
         self.awm = AWMManager(
             gemini_client=self.gemini,
             model=self.config.get("gemini_model", "gemini-3.8-flash")
@@ -353,6 +399,33 @@ class EngineManager:
         user_goal: Optional[str] = None,
         is_steering: bool = False
     ) -> Iterator[Tuple[str, Any]]:
+        """ステートマシン管理付きストリーミング実行（ManagedStream を返す）。
+
+        呼び出し時点で旧ストリームを失効（RUNNING→PAUSED→RESUMING の再開では LoopGuard 履歴も破棄）し、
+        終了/中断時は自分が最新世代の場合のみ IDLE へ戻す。実処理は _generate_stream_impl。
+        """
+        turn_ctx = default_task_state.begin_turn(steering=is_steering, label="engine.generate_stream")
+        inner = self._generate_stream_impl(
+            prompt=prompt,
+            system_instruction=system_instruction,
+            thinking_level=thinking_level,
+            mode=mode,
+            user_goal=user_goal,
+            is_steering=is_steering,
+            turn_ctx=turn_ctx,
+        )
+        return ManagedStream(inner, turn_ctx)
+
+    def _generate_stream_impl(
+        self,
+        prompt: str,
+        system_instruction: Optional[str] = None,
+        thinking_level: Optional[str] = None,
+        mode: str = "light",
+        user_goal: Optional[str] = None,
+        is_steering: bool = False,
+        turn_ctx: Any = None
+    ) -> Iterator[Tuple[str, Any]]:
         """
         ストリーミング実行 (エラー時に第2・第3エンジンへ勝手に連鎖して3重課金するフォールバックを完全廃止)
         AWM先行ガイダンス注入・Smart Auto-RAG常駐セッション透過注入および非同期バックグラウンド自己学習を透過実行
@@ -364,8 +437,16 @@ class EngineManager:
             effective_sys_inst = system_instruction
             effective_prompt = prompt
         else:
-            effective_sys_inst, _ = self._inject_awm_guidance(clean_goal, system_instruction)
-            effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
+            # 記憶層（AWM/RAG/SQLite）の実働エラーで推論ターン全体を落とさない: 失敗時は注入なしで継続
+            effective_sys_inst, rag_ctx = system_instruction, None
+            try:
+                effective_sys_inst, _ = self._inject_awm_guidance(clean_goal, system_instruction)
+            except Exception as mem_err:
+                logging.getLogger(__name__).warning("AWM guidance injection skipped: %s", mem_err)
+            try:
+                effective_sys_inst, rag_ctx = self._inject_rag_context(prompt, effective_sys_inst)
+            except Exception as mem_err:
+                logging.getLogger(__name__).warning("RAG context injection skipped: %s", mem_err)
             # 常駐AntigravitySessionは初回生成時のsystem_instructionを保持するため、
             # 2ターン目以降も最新ターンのRAGコンテキストが確実にAgentへ届くようプロンプト側にも透過注入する
             effective_prompt = prompt
@@ -421,11 +502,14 @@ class EngineManager:
 
                     # ターン完了後、ノイズフィルター通過時のみ裏でAWM学習
                     if is_success and collected_steps and hasattr(self, "awm") and self.awm:
-                        self.awm.learn_trajectory_async(
-                            session_id=f"sess_{int(time.time())}",
-                            user_goal=clean_goal[:200],
-                            steps=collected_steps
-                        )
+                        try:
+                            self.awm.learn_trajectory_async(
+                                session_id=f"sess_{int(time.time())}",
+                                user_goal=clean_goal[:200],
+                                steps=collected_steps
+                            )
+                        except Exception as mem_err:
+                            logging.getLogger(__name__).warning("AWM learning skipped: %s", mem_err)
                     return
             except Exception as e:
                 yield ("error", f"Session error (stopped immediately to prevent duplicate API billing): {e}")
@@ -436,6 +520,10 @@ class EngineManager:
             system_instruction=effective_sys_inst,
             thinking_level=active_level
         ):
+            if turn_ctx is not None and turn_ctx.closed.is_set():
+                # 中断で失効した旧ストリームはここで確実に打ち切る（セッション不在のフォールバック経路でも再開を阻害しない）
+                yield ("cancelled", "Task cancelled")
+                return
             yield chunk
 
     def get_awm_stats(self) -> Dict[str, Any]:
@@ -453,6 +541,11 @@ class EngineManager:
     def cancel_active_task(self):
         """Cancels any running agent turn in the active persistent session."""
         try:
+            # 旧ストリーム失効 + ワーカー/Queueフラッシュ + LoopGuard履歴クリア（RUNNING/PAUSED -> CANCELLED）
+            default_task_state.cancel("engine.cancel_active_task")
+        except Exception:
+            pass
+        try:
             from interfaces.cli.task_interrupter import TaskInterrupter
             TaskInterrupter.terminate_all_active_processes()
         except Exception:
@@ -465,8 +558,24 @@ class EngineManager:
                 pass
         return False
 
+    def _flush_session_queues(self) -> None:
+        """中断・再開時に常駐セッションの worker 側に残った古い要求を破棄する（ステートマシンのフラッシュフック）"""
+        sess = self.session
+        if sess is not None and hasattr(sess, "_flush_stale_requests"):
+            try:
+                sess._flush_stale_requests()
+            except Exception:
+                pass
+
     def set_paused(self, paused: bool):
         """Freezes or unfreezes session timeout timers during ESC TASK PAUSED state."""
+        try:
+            if paused:
+                default_task_state.pause()
+            else:
+                default_task_state.resume(steering=False)
+        except Exception:
+            pass
         if self.session and hasattr(self.session, "set_paused"):
             try:
                 self.session.set_paused(paused)

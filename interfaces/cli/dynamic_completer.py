@@ -30,6 +30,8 @@ MAIN_COMMANDS: Dict[str, str] = {
     "/doctor": "Termux環境自律整備＆修復 (プロセス回収/ゴミ掃除/Phantom)",
     "/reload": "SKILL・MCP・常駐セッションの無停止ホットリロード (/reload)",
     "/skills": "TUGUMIv6 SKILLエコシステム全61種一覧・検索 (/skills [word])",
+    "/subagents": "専門サブエージェント編成目録一覧表示 (/subagents)",
+    "/subagent": "専門サブエージェント直接単独実行 (/subagent <name> <指示>)",
     "/skill": "指定スキルの詳細確認・手動強制発動 (/skill <スキル名> [指示])",
     "/mcp": "MCP 2.0 連携サーバー・ツール一覧確認 (/mcp [server])",
     "/awm": "AWM自律学習ステータス・ワークフロー一覧・パージ (/awm [list|purge])",
@@ -317,6 +319,22 @@ class TugumiRichCompleter(Completer):
                         start_position=-len(sub_word),
                         display=s_name,
                         display_meta=s_meta
+                    )
+
+        # A-2. /subagent
+        elif base_cmd == "/subagent":
+            subagents_cand = {
+                "researcher": "専門リサーチ・RAG知識探索・Web調査サブエージェント",
+                "sysops": "システム運用・端末診断・特権実行サブエージェント",
+                "code_craftsman": "自律コーディング・精密デバッグサブエージェント"
+            }
+            for sa_name, sa_meta in subagents_cand.items():
+                if sa_name.lower().startswith(sub_word):
+                    yield Completion(
+                        text=sa_name,
+                        start_position=-len(sub_word),
+                        display=sa_name,
+                        display_meta=sa_meta
                     )
 
         # B. /mcp

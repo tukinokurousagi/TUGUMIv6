@@ -3,6 +3,8 @@
 TUGUMIv6 SQLite Memory Core
 - SQLite WAL (Write-Ahead Logging) Mode
 - PRAGMA busy_timeout = 60000 (Deadlock-Free in Termux)
+- BEGIN IMMEDIATE 書き込みトランザクション (読取→書込ロック昇格競合 "database is locked" の根絶)
+- with 脱出時に commit/rollback + close を保証 (中断/例外時の接続・ロック残留ゼロ)
 - Multithread-Safe with threading.RLock
 - FTS5 Full-Text Search Integration
 """
@@ -48,6 +50,47 @@ def compute_ebbinghaus_decay(
     decay = math.exp(- elapsed_days / max(0.1, stability))
     return round(float(decay), 4)
 
+class ManagedConnection(sqlite3.Connection):
+    """`with` 脱出時に commit（例外時は rollback）した上で必ず close する接続。
+
+    標準の sqlite3.Connection は __exit__ で commit/rollback するだけで close しないため、
+    タスク中断(CancelledError/GeneratorExit)や例外時に接続とトランザクションが残留し、
+    再開後の書き込みが "database is locked" で待たされる原因になる。
+    """
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            try:
+                self.close()
+            except Exception:
+                pass
+
+
+def open_wal_connection(db_path: str, row_factory: Any = None, busy_timeout_ms: int = 60000) -> sqlite3.Connection:
+    """WAL + busy_timeout 強制 + 書込は BEGIN IMMEDIATE で開始する共有接続ファクトリ。
+
+    isolation_level="IMMEDIATE" により INSERT/UPDATE/DELETE の直前に自動で BEGIN IMMEDIATE が発行され、
+    DEFERRED トランザクションの読取→書込ロック昇格競合（busy_timeout を無視して即 locked になる）を防ぐ。
+    """
+    conn = sqlite3.connect(
+        db_path,
+        timeout=busy_timeout_ms / 1000.0,
+        isolation_level="IMMEDIATE",
+        factory=ManagedConnection,
+    )
+    try:
+        if row_factory is not None:
+            conn.row_factory = row_factory
+        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)};")
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
 class SQLiteMemory:
     """Thread-Safe WAL-Enabled SQLite Memory for TUGUMIv6"""
     def __init__(self, db_path: str = "/data/data/com.termux/files/home/TUGUMIv6/data/tugumi_memory.db"):
@@ -56,12 +99,7 @@ class SQLiteMemory:
         self._init_schema()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=60.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA busy_timeout = 60000;")
-        return conn
+        return open_wal_connection(self.db_path, row_factory=sqlite3.Row)
 
     def _init_schema(self) -> None:
         with self.lock:
@@ -410,6 +448,7 @@ class SQLiteMemory:
         tier = tier if tier in ("working", "episodic", "semantic", "procedural") else "semantic"
         with self.lock:
             with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")  # SELECT→INSERT/UPDATE の競合を原子化
                 cursor = conn.cursor()
                 # 既存の同一subject+categoryがあれば更新、なければ挿入
                 cursor.execute("""
@@ -595,6 +634,7 @@ class SQLiteMemory:
         """全記憶のエビングハウス減衰スコアを一括再計算して更新"""
         with self.lock:
             with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 cursor = conn.cursor()
                 cursor.execute("SELECT id, last_accessed_at, access_count, importance, tier, decay_half_life_days FROM structured_memories")
                 rows = cursor.fetchall()

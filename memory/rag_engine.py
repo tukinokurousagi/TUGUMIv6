@@ -15,6 +15,7 @@ import math
 import json
 import sqlite3
 import re
+import threading
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -22,6 +23,11 @@ from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
+
+try:
+    from .sqlite_memory import open_wal_connection
+except ImportError:  # スクリプト直接実行時のフォールバック
+    from memory.sqlite_memory import open_wal_connection
 
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
@@ -83,8 +89,13 @@ class HybridRAGEngine:
         self.vector_cache_path = vector_cache_path
         self.db_path = db_path
         self.vector_store: List[Dict[str, Any]] = []
+        # vector_store / ベクトルキャッシュJSON / FTS5 の更新を直列化する再入ロック
+        self._lock = threading.RLock()
+        # Transactional Outbox: vector_store 更新後〜FTS5同期完了までの間に中断されたことを示す永続マーカー
+        self._outbox_path = f"{self.vector_cache_path}.fts_dirty"
         self._ensure_db_schema()
         self._load_vector_cache()
+        self._recover_outbox()
 
     @property
     def vector_cache(self) -> Dict[str, Any]:
@@ -109,9 +120,7 @@ class HybridRAGEngine:
         """SQLite FTS5 テーブルの存在を保証する"""
         try:
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA journal_mode = WAL;")
-                conn.execute("PRAGMA busy_timeout = 60000;")
+            with open_wal_connection(self.db_path) as conn:
                 conn.execute("""
                     CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
                         title,
@@ -138,12 +147,47 @@ class HybridRAGEngine:
                 self.vector_store = []
 
     def _save_vector_cache(self) -> None:
+        """ベクトルキャッシュをアトミックに保存 (tmp書込→fsync→os.replace。中断されても既存JSONを破損させない)"""
+        with self._lock:
+            tmp_path = f"{self.vector_cache_path}.tmp"
+            try:
+                os.makedirs(os.path.dirname(self.vector_cache_path), exist_ok=True)
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(self.vector_store, f, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.vector_cache_path)
+            except BaseException as e:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except OSError:
+                    pass
+                if isinstance(e, Exception):
+                    print(f"[RAGEngine] Cache save failed: {e}")
+                else:
+                    raise  # CancelledError / KeyboardInterrupt / GeneratorExit は握り潰さず伝播
+
+    def _mark_outbox_dirty(self) -> None:
         try:
-            os.makedirs(os.path.dirname(self.vector_cache_path), exist_ok=True)
-            with open(self.vector_cache_path, "w", encoding="utf-8") as f:
-                json.dump(self.vector_store, f, ensure_ascii=False)
-        except Exception as e:
-            print(f"[RAGEngine] Cache save failed: {e}")
+            os.makedirs(os.path.dirname(self._outbox_path), exist_ok=True)
+            with open(self._outbox_path, "w", encoding="utf-8") as f:
+                f.write("1")
+        except OSError as e:
+            print(f"[RAGEngine] Outbox mark failed: {e}")
+
+    def _clear_outbox(self) -> None:
+        try:
+            if os.path.exists(self._outbox_path):
+                os.remove(self._outbox_path)
+        except OSError:
+            pass
+
+    def _recover_outbox(self) -> None:
+        """前回の取り込みが vector_store 更新後・FTS5同期前に中断されていた場合、FTS5を vector_store から再構築して整合を回復する"""
+        if os.path.exists(self._outbox_path):
+            if self._rebuild_fts_from_store():
+                self._clear_outbox()
 
     def chunk_text(self, text: str, chunk_size: int = 900, overlap: int = 120) -> List[str]:
         """テキストの適切なサイズでのチャンク分割（段落・改行境界を考慮）"""
@@ -563,11 +607,15 @@ class HybridRAGEngine:
                     except Exception:
                         pass
 
-        self.vector_store = kept_store + new_items
-        self._save_vector_cache()
-
-        # SQLite FTS5 テーブルを vector_store と完全整合させる
-        self._rebuild_fts_from_store()
+        # Transactional Outbox: 先に永続マーカーを書き、vector_store→キャッシュJSON→FTS5 を一連で更新。
+        # この間に中断(キャンセル/強制終了)されてもマーカーが残り、次回起動時に FTS5 が自動再構築される。
+        with self._lock:
+            self._mark_outbox_dirty()
+            self.vector_store = kept_store + new_items
+            self._save_vector_cache()
+            # SQLite FTS5 テーブルを vector_store と完全整合させる
+            if self._rebuild_fts_from_store():
+                self._clear_outbox()
 
         summary = self.get_status_summary()
         summary["newly_indexed_files"] = len(files_to_process)
@@ -575,13 +623,10 @@ class HybridRAGEngine:
         summary["unchanged_files"] = unchanged_files_count
         return summary
 
-    def _rebuild_fts_from_store(self) -> None:
-        """vector_store の全チャンクを SQLite FTS5 (knowledge_fts) に完全同期する"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("PRAGMA journal_mode = WAL;")
-                conn.execute("PRAGMA busy_timeout = 60000;")
-                conn.execute("DELETE FROM knowledge_fts WHERE category LIKE 'rag%' OR category = 'self_evolution';")
+    def _rebuild_fts_from_store(self) -> bool:
+        """vector_store の全チャンクを SQLite FTS5 (knowledge_fts) に単一トランザクションで完全同期する。成功時 True"""
+        with self._lock:
+            try:
                 rows_to_insert = []
                 for item in self.vector_store:
                     title = item.get("title", "")
@@ -592,13 +637,18 @@ class HybridRAGEngine:
                     category = f"rag:{folder}" if folder else "rag_file"
                     source_path = item.get("file_path", "")
                     rows_to_insert.append((display_title, content, category, source_path))
-                conn.executemany("""
-                    INSERT INTO knowledge_fts (title, content, category, source_path)
-                    VALUES (?, ?, ?, ?)
-                """, rows_to_insert)
-                conn.commit()
-        except Exception as e:
-            print(f"[RAGEngine] FTS5 rebuild warning: {e}")
+                # with 脱出時に commit（例外/中断時は rollback）＋ close。DELETE と INSERT は原子的
+                with open_wal_connection(self.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("DELETE FROM knowledge_fts WHERE category LIKE 'rag%' OR category = 'self_evolution';")
+                    conn.executemany("""
+                        INSERT INTO knowledge_fts (title, content, category, source_path)
+                        VALUES (?, ?, ?, ?)
+                    """, rows_to_insert)
+                return True
+            except Exception as e:
+                print(f"[RAGEngine] FTS5 rebuild warning: {e}")
+                return False
 
     def add_knowledge(self, title: str, text: str, category: str = "self_evolution") -> bool:
         """単一ドキュメントを即座にファイル保存し、3072次元ベクトル化およびFTS5へ同期登録"""
@@ -615,9 +665,6 @@ class HybridRAGEngine:
             chunks = self.chunk_text(text)
             client = self._ensure_client()
 
-            # 既存の同名知識を除去して最新化
-            self.vector_store = [it for it in self.vector_store if it.get("file_path") != file_path]
-
             vecs: List[List[float]] = []
             if client and chunks:
                 try:
@@ -630,16 +677,13 @@ class HybridRAGEngine:
             else:
                 vecs = [[] for _ in chunks]
 
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA journal_mode = WAL;")
-            conn.execute("PRAGMA busy_timeout = 60000;")
-            conn.execute("DELETE FROM knowledge_fts WHERE source_path = ?;", (file_path,))
-
+            # 新規エントリをメモリ上で完全構築（ここまでは vector_store / DB を一切変更しない）
+            new_entries: List[Dict[str, Any]] = []
+            fts_rows: List[Tuple[str, str, str, str]] = []
             for i, chunk in enumerate(chunks):
-                chunk_id = f"{file_path}#{i}"
                 vec = vecs[i] if i < len(vecs) else []
-                self.vector_store.append({
-                    "source_chunk_id": chunk_id,
+                new_entries.append({
+                    "source_chunk_id": f"{file_path}#{i}",
                     "file_path": file_path,
                     "rel_path": f"rag_knowledge/{safe_name}.md",
                     "folder": category,
@@ -650,14 +694,20 @@ class HybridRAGEngine:
                     "text": chunk,
                     "embedding": vec if isinstance(vec, list) else []
                 })
-                conn.execute("""
-                    INSERT INTO knowledge_fts (title, content, category, source_path)
-                    VALUES (?, ?, ?, ?)
-                """, (title, chunk, f"rag:{category}", file_path))
+                fts_rows.append((title, chunk, f"rag:{category}", file_path))
 
-            conn.commit()
-            conn.close()
-            self._save_vector_cache()
+            # Transactional Outbox: DB(FTS5)を単一トランザクションで確定 → 成功時のみ vector_store/キャッシュを更新。
+            # DB失敗・キャンセル時は rollback され、vector_store 側に孤立ベクトルが残らない。
+            with self._lock:
+                with open_wal_connection(self.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("DELETE FROM knowledge_fts WHERE source_path = ?;", (file_path,))
+                    conn.executemany("""
+                        INSERT INTO knowledge_fts (title, content, category, source_path)
+                        VALUES (?, ?, ?, ?)
+                    """, fts_rows)
+                self.vector_store = [it for it in self.vector_store if it.get("file_path") != file_path] + new_entries
+                self._save_vector_cache()
             return True
         except Exception as e:
             print(f"[RAGEngine] add_knowledge failed: {e}")
@@ -777,8 +827,7 @@ class HybridRAGEngine:
         # 2. Sparse FTS5 Search
         sparse_results: List[Dict[str, Any]] = []
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
+            with open_wal_connection(self.db_path, row_factory=sqlite3.Row) as conn:
                 cur = conn.cursor()
                 fts_terms = [t for t in terms if t.isalnum()]
                 safe_q = " OR ".join(fts_terms)
@@ -1039,7 +1088,7 @@ class HybridRAGEngine:
 
         fts_count = 0
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with open_wal_connection(self.db_path) as conn:
                 fts_count = conn.execute("SELECT count(*) FROM knowledge_fts").fetchone()[0]
         except Exception:
             pass

@@ -77,3 +77,92 @@ def get_tugumi_subagents() -> List[types.SubagentConfig]:
     )
 
     return [research_agent, sysops_agent, coder_agent]
+
+
+def list_subagents_info() -> List[dict]:
+    """CLI・WebUI表示用のサブエージェント目録情報を返却"""
+    subagents = get_tugumi_subagents()
+    res = []
+    for sa in subagents:
+        tool_names = [getattr(t, "__name__", str(t)) for t in (sa.tools or [])]
+        builtin_tools = [getattr(bt, "value", str(bt)) for bt in (sa.capabilities.enabled_tools or [])] if sa.capabilities else []
+        res.append({
+            "name": sa.name,
+            "description": sa.description,
+            "system_instructions": sa.system_instructions,
+            "tools": tool_names,
+            "builtin_tools": builtin_tools,
+        })
+    return res
+
+
+def execute_subagent_task(name: str, task_prompt: str) -> dict:
+    """指定サブエージェントを専用コンテキスト・専用ツール群で即座に直接単独実行（CLI /subagent またはツール互換用）"""
+    subagents = {sa.name: sa for sa in get_tugumi_subagents()}
+    if name not in subagents:
+        available = ", ".join(subagents.keys())
+        return {
+            "success": False,
+            "subagent": name,
+            "error": f"未知のサブエージェント '{name}' です。利用可能: {available}",
+            "result": ""
+        }
+
+    target = subagents[name]
+    from core.antigravity_sdk import AntigravityEngine
+    from google.antigravity import Agent, LocalAgentConfig, CapabilitiesConfig, types as agy_types
+    import os
+
+    engine = AntigravityEngine()
+    if not engine.is_available():
+        return {
+            "success": False,
+            "subagent": name,
+            "error": "Antigravity SDK が利用不可のためサブエージェントを実行できません。",
+            "result": ""
+        }
+
+    # サブエージェント専用の軽量LocalAgentConfigを構築
+    capabilities = CapabilitiesConfig(
+        enable_subagents=False,
+        enabled_tools=target.capabilities.enabled_tools if target.capabilities else None,
+        max_subagent_depth=1
+    )
+
+    save_dir = f"/data/data/com.termux/files/home/.tugumi/subagents/{name}"
+    os.makedirs(save_dir, exist_ok=True)
+
+    config = LocalAgentConfig(
+        system_instructions=target.system_instructions,
+        models=engine._build_models_config(engine.default_model),
+        tools=target.tools or [],
+        capabilities=capabilities,
+        save_dir=save_dir,
+        workspaces=[engine.workspace]
+    )
+
+    try:
+        import asyncio
+        async def _run():
+            async with Agent(config) as ag:
+                resp = await ag.chat(task_prompt)
+                chunks = []
+                async for ch in resp.chunks:
+                    if isinstance(ch, agy_types.Text):
+                        chunks.append(ch.text)
+                return "".join(chunks)
+
+        text = asyncio.run(_run())
+        return {
+            "success": True,
+            "subagent": name,
+            "result": text or "（処理完了）",
+            "error": None
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "subagent": name,
+            "error": str(e),
+            "result": ""
+        }

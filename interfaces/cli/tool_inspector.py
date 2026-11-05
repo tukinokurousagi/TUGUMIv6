@@ -21,9 +21,30 @@ class ToolInspector:
         self._start_times: Dict[str, float] = {}
 
     def display_tool_start(self, tool_name: str, args: Optional[Dict[str, Any]] = None):
-        """ツール実行開始をスマートな1行パルス表示"""
+        """ツール実行開始をスマートな1行パルス表示（サブエージェント委譲時は専用バッジ）"""
         self._start_times[tool_name] = time.time()
-        
+
+        # サブエージェント委譲の特別リッチ表示
+        if "subagent" in tool_name.lower():
+            target_sa = ""
+            sub_prompt = ""
+            if args:
+                target_sa = args.get("subagent_name") or args.get("TypeName") or ""
+                sub_prompt = args.get("task_prompt") or args.get("Prompt") or ""
+                if not target_sa and "Subagents" in args and isinstance(args["Subagents"], list) and args["Subagents"]:
+                    first_sa = args["Subagents"][0]
+                    target_sa = first_sa.get("TypeName") or first_sa.get("name") or ""
+                    sub_prompt = first_sa.get("Prompt") or ""
+
+            clean_p = sub_prompt.replace("\n", " ").strip()
+            if len(clean_p) > 50:
+                clean_p = clean_p[:47] + "..."
+
+            tag = "[bold #bd93f9]🤖 [SUBAGENT_DISPATCH][/bold #bd93f9]"
+            sa_badge = f"[bold white on #6272a4] {target_sa or 'worker'} [/bold white on #6272a4]"
+            self.console.print(f"  {tag} {sa_badge} [dim cyan]指示: {escape(clean_p)}[/dim cyan]")
+            return
+
         # 主要引数のコンパクト要約
         arg_summary = ""
         if args:

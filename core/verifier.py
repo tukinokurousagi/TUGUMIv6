@@ -6,6 +6,7 @@ TUGUMIv6 Pre-Delivery 5-Layer Verification Gate Engine
 - Gate 3: Dynamic Execution Test (dry-run / CLI command Exit Code 0)
 - Gate 4: Zero-Regression Check (pytest anti-downgrade / target suite)
 - Gate 5: Token & Workspace Sanitation Check (.bak/junk absence, recursion guard)
+- Fail-Closed: ゲート内部で予期しない例外が発生した場合は絶対に通過させず SecurityVerificationFailure を送出する
 """
 
 import json
@@ -17,11 +18,23 @@ import sys
 from typing import Dict, Any, Optional, Tuple
 
 
-class SystemVerifier:
-    """5-Layer Verification Gate Enforcer"""
+class SecurityVerificationFailure(Exception):
+    """検証ゲートが「拒絶」または「検証不能(予期せぬ例外)」に倒れたことを示す Fail-Closed 例外"""
 
-    def __init__(self, workspace_root: str = "/data/data/com.termux/files/home/TUGUMIv6"):
+    def __init__(self, message: str, stage: str = "", details: str = "", result: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.stage = stage
+        self.details = details
+        self.result = result or {"passed": False, "stage": stage, "details": details, "message": message, "gates": {}}
+
+
+class SystemVerifier:
+    """5-Layer Verification Gate Enforcer (Fail-Closed)"""
+
+    def __init__(self, workspace_root: str = "/data/data/com.termux/files/home/TUGUMIv6", fail_closed: bool = True):
         self.workspace_root = workspace_root
+        # True: 検証ツール欠落(ruff/node/回帰スイート不在)も「検証不能=拒絶」として扱う
+        self.fail_closed = fail_closed
 
     def check_python_syntax(self, file_path: str) -> Tuple[bool, str]:
         """Gate 1 (Python): Verify Python AST & compilation."""
@@ -57,6 +70,8 @@ class SystemVerifier:
         if not os.path.exists(file_path):
             return False, f"File not found: {file_path}"
         if not shutil.which("node"):
+            if self.fail_closed:
+                return False, f"Node binary not present; cannot verify JS syntax (fail-closed): {os.path.basename(file_path)}"
             return True, f"Node binary not present; skipped JS syntax check for {os.path.basename(file_path)}"
         try:
             res = subprocess.run(
@@ -83,7 +98,14 @@ class SystemVerifier:
             return False, f"JSON SyntaxError in {file_path}: {e}"
 
     def check_syntax(self, file_path: str) -> Dict[str, Any]:
-        """Unified syntax check interface for AutoHeal & CLI tools (Gate 1)."""
+        """Unified syntax check interface for AutoHeal & CLI tools (Gate 1). 予期せぬ例外は valid=False (Fail-Closed)。"""
+        try:
+            return self._check_syntax_impl(file_path)
+        except Exception as e:
+            msg = f"Syntax gate internal error (fail-closed): {type(e).__name__}: {e}"
+            return {"valid": False, "error": msg, "message": msg}
+
+    def _check_syntax_impl(self, file_path: str) -> Dict[str, Any]:
         if file_path.endswith(".py"):
             ok, msg = self.check_python_syntax(file_path)
             return {"valid": ok, "error": None if ok else msg, "message": msg}
@@ -105,6 +127,8 @@ class SystemVerifier:
         if not file_path.endswith(".py"):
             return True, f"Static gate passed (non-Python file: {os.path.basename(file_path)})"
         if not shutil.which("ruff"):
+            if self.fail_closed:
+                return False, "Ruff not installed; static gate cannot be verified (fail-closed)"
             return True, "Ruff not installed; static check skipped"
         try:
             res = subprocess.run(
@@ -140,6 +164,8 @@ class SystemVerifier:
         """Gate 4 (Zero-Regression): Verify anti-downgrade guard or specified pytest suite."""
         target = test_target or os.path.join(self.workspace_root, "tests", "test_anti_downgrade_guard.py")
         if not os.path.exists(target):
+            if self.fail_closed:
+                return False, f"Regression suite not found; zero-regression cannot be verified (fail-closed): {target}"
             return True, "Regression suite not found; skipped"
         try:
             res = subprocess.run(
@@ -179,7 +205,27 @@ class SystemVerifier:
         test_command: Optional[str] = None,
         run_regression: bool = False
     ) -> Dict[str, Any]:
-        """Run full 5-Layer Verification Gate on a target file."""
+        """Run full 5-Layer Verification Gate on a target file.
+
+        Fail-Closed: ゲートの正常な「不合格」は {"passed": False, ...} として返す。
+        ゲート処理中に予期しない例外が発生した場合は絶対に通過させず SecurityVerificationFailure を送出する。
+        """
+        try:
+            return self._verify_all_gates_impl(file_path, test_command, run_regression)
+        except SecurityVerificationFailure:
+            raise
+        except BaseException as e:  # KeyboardInterrupt/CancelledError でも「検証完了扱い」にしない
+            if not isinstance(e, Exception):
+                raise
+            msg = f"Verification aborted by unexpected error (fail-closed): {type(e).__name__}: {e}"
+            raise SecurityVerificationFailure(msg, stage="Verifier Internal Error", details=msg) from e
+
+    def _verify_all_gates_impl(
+        self,
+        file_path: str,
+        test_command: Optional[str],
+        run_regression: bool
+    ) -> Dict[str, Any]:
         gates: Dict[str, Dict[str, Any]] = {}
 
         # Gate 1: Syntax
@@ -232,4 +278,6 @@ class SystemVerifier:
 
 
 VerificationEngine = SystemVerifier
+
+__all__ = ["SystemVerifier", "VerificationEngine", "SecurityVerificationFailure"]
 

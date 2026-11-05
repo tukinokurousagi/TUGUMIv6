@@ -676,6 +676,12 @@ class AntigravitySession:
         self._is_paused = False
         self._was_cancelled_last_turn = False
         self._inflight_tool_call = None
+        # ターン生存管理: worker が前ターンを完全に片付けて idle になったかを呼び出しスレッドから待機できるようにする
+        self._turn_idle = threading.Event()
+        self._turn_idle.set()
+        # worker 世代: reset/hard-restart 後に残存した旧 worker（ゾンビ）が新 worker の状態を汚染・二重消費しないようにする
+        self._worker_gen = 0
+        self._cancel_inflight = None
         self._start_worker()
 
     def set_paused(self, paused: bool):
@@ -684,14 +690,104 @@ class AntigravitySession:
 
     def _start_worker(self):
         self.active = True
+        self._worker_gen += 1
+        self._turn_idle.set()
         self.ready_event.clear()
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread = threading.Thread(target=self._run_loop, args=(self._worker_gen,), daemon=True)
         self.thread.start()
         self.ready_event.wait(timeout=60.0)
 
-    def _run_loop(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
+    async def _bounded_cancel(self, conv: Any, timeout: float = 3.0) -> None:
+        """conversation.cancel() を「重複排除 + タイムアウト付き」で実行する。
+
+        再開時のハング原因: キャンセル待機が無期限・多重(cancel() / CancelledError処理 / 次ターン準備が同時に
+        conv.cancel() を呼ぶ)だと worker がキャンセル完了待ちで固まり、後続の追加プロンプトが処理されない。
+        """
+        inflight = self._cancel_inflight
+        if inflight is not None and not inflight.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(inflight), timeout=timeout)
+            except (asyncio.TimeoutError, Exception):
+                pass
+            return
+        task = asyncio.ensure_future(conv.cancel())
+        self._cancel_inflight = task
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            task.cancel()
+        except Exception:
+            pass
+
+    async def _close_dangling_tool_call(self, agent: Any, timeout: float = 2.0) -> bool:
+        """未完了の function_call があれば {"status": "interrupted_by_user"} のダミー応答でペアを閉じ、
+        次のユーザー発言が function_call 直後に割り込むスキーマ違反（API/ハーネスの沈黙停止）を防ぐ"""
+        tc = self._inflight_tool_call
+        if tc is None or not getattr(tc, "id", None):
+            return False
+        self._inflight_tool_call = None
+        try:
+            conn = getattr(agent.conversation, "_connection", None)
+            proc = getattr(conn, "_processor", None) if conn else None
+            if proc is None:
+                return False
+            await asyncio.wait_for(
+                proc._send_tool_results([
+                    agy_types.ToolResult(
+                        id=tc.id,
+                        name=getattr(tc, "name", "tool"),
+                        result={"status": "interrupted_by_user", "message": "Interrupted by Master Takuma via ESC"},
+                    )
+                ]),
+                timeout=timeout,
+            )
+            return True
+        except Exception:
+            return False
+
+    def _flush_stale_requests(self) -> None:
+        """worker 側 async_in_q に残留した中断前の古い要求を破棄（死んだ出力キュー宛てに推論を実行して課金・競合するのを防ぐ）"""
+        loop, q = self.loop, self.async_in_q
+        if loop is None or q is None or not loop.is_running():
+            return
+
+        async def _drain():
+            n = 0
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                    n += 1
+                except Exception:
+                    break
+            return n
+
+        try:
+            asyncio.run_coroutine_threadsafe(_drain(), loop).result(timeout=1.0)
+        except Exception:
+            pass
+
+    def _quiesce_previous_turn(self, timeout: float = 5.0) -> None:
+        """新ターン投入前に、前ターンの worker タスクが完全に片付く(idle)まで保証する。
+
+        再開（追加プロンプト投入）時のハング原因: 中断した旧ターンの _execute がキャンセル後処理中のまま
+        新要求を積むと、旧ターンの _cancel_requested.clear() 競合・旧タスク残響・キュー滞留で新ターンが詰まる。
+        """
+        if self._turn_idle.wait(timeout=0.25):
+            self._flush_stale_requests()
+            return
+        self.cancel()
+        if not self._turn_idle.wait(timeout=timeout):
+            # 旧ターンが規定時間内に片付かない → worker を世代ごと完全破棄して新規再生成（永久ハング遮断）
+            print("[AntigravitySession] 前ターンの終了待機がタイムアウト。worker を完全再生成して再開します。")
+            self.reset()
+            return
+        self._flush_stale_requests()
+
+    def _run_loop(self, gen: int = 0):
+        # ローカル束縛: 世代交代後に self.loop が新 worker のループへ差し替わっても、旧 worker が新ループを close しない
+        my_loop = asyncio.new_event_loop()
+        self.loop = my_loop
+        asyncio.set_event_loop(my_loop)
 
         def _is_ws_closed_error(err: BaseException) -> bool:
             msg = str(err)
@@ -729,7 +825,7 @@ class AntigravitySession:
                         except Exception:
                             pass
                         try:
-                            await conv.cancel()
+                            await self._bounded_cancel(conv)
                         except Exception:
                             pass
 
@@ -738,18 +834,7 @@ class AntigravitySession:
                             await asyncio.wait_for(proc.is_idle.wait(), timeout=0.15)
                         except asyncio.TimeoutError:
                             # もし他のツール呼び出しがまだ応答していない場合、インフライトのtool_callに即座にキャンセル応答を送ってlocalharnessを0.01秒で解放する
-                            inflight_tc = self._inflight_tool_call
-                            if inflight_tc is not None and getattr(inflight_tc, "id", None):
-                                try:
-                                    await proc._send_tool_results([
-                                        agy_types.ToolResult(
-                                            id=inflight_tc.id,
-                                            name=getattr(inflight_tc, "name", "tool"),
-                                            error="Interrupted by Master Takuma via ESC",
-                                        )
-                                    ])
-                                except Exception:
-                                    pass
+                            await self._close_dangling_tool_call(agent)
                             try:
                                 await asyncio.wait_for(proc.is_idle.wait(), timeout=0.6)
                             except asyncio.TimeoutError:
@@ -770,10 +855,11 @@ class AntigravitySession:
                 return True
 
         async def _main():
-            self.async_in_q = asyncio.Queue()
+            my_in_q = asyncio.Queue()
+            self.async_in_q = my_in_q
             retry_req = None
 
-            while self.active:
+            while self.active and gen == self._worker_gen:
                 config = self.engine.build_config(
                     system_instruction=self.system_instruction,
                     thinking_level=self.thinking_level,
@@ -782,16 +868,19 @@ class AntigravitySession:
                 try:
                     async with Agent(config) as agent:
                         self.current_agent = agent
+                        self._cancel_inflight = None
                         self.ready_event.set()
                         reconnect_needed = False
 
-                        while self.active and not reconnect_needed:
+                        while self.active and gen == self._worker_gen and not reconnect_needed:
                             if retry_req is not None:
                                 req = retry_req
                                 retry_req = None
                             else:
-                                req = await self.async_in_q.get()
+                                req = await my_in_q.get()
 
+                            if gen != self._worker_gen:
+                                break  # 世代交代済みの旧 worker（ゾンビ）は新 worker のために一切処理せず退場
                             if req is None or not self.active:
                                 self.active = False
                                 break
@@ -835,7 +924,7 @@ class AntigravitySession:
                                                 if next_chunk_task and not next_chunk_task.done():
                                                     next_chunk_task.cancel()
                                                 try:
-                                                    await agent.conversation.cancel()
+                                                    await self._bounded_cancel(agent.conversation)
                                                 except Exception:
                                                     pass
                                                 out_sync_q.put(("cancelled", "Task cancelled"))
@@ -849,7 +938,7 @@ class AntigravitySession:
                                                 if self._cancel_requested.is_set():
                                                     next_chunk_task.cancel()
                                                     try:
-                                                        await agent.conversation.cancel()
+                                                        await self._bounded_cancel(agent.conversation)
                                                     except Exception:
                                                         pass
                                                     out_sync_q.put(("cancelled", "Task cancelled"))
@@ -867,7 +956,7 @@ class AntigravitySession:
                                                     continue
                                                 next_chunk_task.cancel()
                                                 try:
-                                                    await agent.conversation.cancel()
+                                                    await self._bounded_cancel(agent.conversation)
                                                 except Exception:
                                                     pass
                                                 err_msg = (
@@ -889,7 +978,7 @@ class AntigravitySession:
 
                                             if self._cancel_requested.is_set():
                                                 try:
-                                                    await agent.conversation.cancel()
+                                                    await self._bounded_cancel(agent.conversation)
                                                 except Exception:
                                                     pass
                                                 out_sync_q.put(("cancelled", "Task cancelled"))
@@ -927,13 +1016,13 @@ class AntigravitySession:
                                         return
                                 except asyncio.TimeoutError:
                                     try:
-                                        await agent.conversation.cancel()
+                                        await self._bounded_cancel(agent.conversation)
                                     except Exception:
                                         pass
                                     out_sync_q.put(("error", "API接続・初回レスポンス待機タイムアウト (120秒無応答ハング検知)"))
                                 except asyncio.CancelledError:
                                     try:
-                                        await agent.conversation.cancel()
+                                        await self._bounded_cancel(agent.conversation)
                                     except Exception:
                                         pass
                                     out_sync_q.put(("cancelled", "Task cancelled"))
@@ -950,6 +1039,8 @@ class AntigravitySession:
                                     if retry_req is None:
                                         if _SDK_TELEMETRY.get("_active_out_q") is out_sync_q:
                                             _SDK_TELEMETRY["_active_out_q"] = None
+                                        # done を通知する前に idle を確定: 消費側が done を受け取って即次ターンを投入しても競合しない
+                                        self._turn_idle.set()
                                         out_sync_q.put(("done", None))
 
                             self.current_task = asyncio.create_task(_execute())
@@ -959,7 +1050,8 @@ class AntigravitySession:
                                 pass
                             finally:
                                 self.current_task = None
-                                if retry_req is None:
+                                # 新ターンが既に current_out_q を差し替えている場合は絶対に上書きしない（所有者のみ解放）
+                                if retry_req is None and self.current_out_q is out_sync_q:
                                     self.current_out_q = None
                 except asyncio.CancelledError:
                     self.ready_event.set()
@@ -979,30 +1071,33 @@ class AntigravitySession:
                         break
                     await asyncio.sleep(0.2)
                 finally:
-                    self.current_agent = None
+                    if gen == self._worker_gen:
+                        self.current_agent = None
 
         try:
-            self.loop.run_until_complete(_main())
+            my_loop.run_until_complete(_main())
         except (Exception, asyncio.CancelledError):
             pass
         finally:
+            if gen == self._worker_gen:
+                self._turn_idle.set()  # worker 終了時は idle 扱い（次ターンが無駄な待機をせず再生成へ進める）
             try:
                 # 未完了タスクの全キャンセルと完了待機
-                pending = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+                pending = [t for t in asyncio.all_tasks(my_loop) if not t.done()]
                 for t in pending:
                     t.cancel()
                 if pending:
-                    self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    my_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                 # 非同期ジェネレータのシャットダウン
-                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
-                if hasattr(self.loop, "shutdown_default_executor"):
-                    self.loop.run_until_complete(self.loop.shutdown_default_executor())
+                my_loop.run_until_complete(my_loop.shutdown_asyncgens())
+                if hasattr(my_loop, "shutdown_default_executor"):
+                    my_loop.run_until_complete(my_loop.shutdown_default_executor())
             except (Exception, asyncio.CancelledError):
                 pass
             finally:
                 try:
-                    if self.loop and not self.loop.is_closed() and not self.loop.is_running():
-                        self.loop.close()
+                    if my_loop and not my_loop.is_closed() and not my_loop.is_running():
+                        my_loop.close()
                 except (Exception, asyncio.CancelledError):
                     pass
 
@@ -1021,15 +1116,17 @@ class AntigravitySession:
                 try:
                     async def _do_cancel():
                         try:
-                            await self.current_agent.conversation.cancel()
+                            await self._bounded_cancel(self.current_agent.conversation)
                         except Exception:
                             pass
                     asyncio.run_coroutine_threadsafe(_do_cancel(), self.loop)
                 except Exception:
                     pass
-            if self.current_task and not self.current_task.done():
+            target_task = self.current_task
+            if target_task and not target_task.done():
                 try:
-                    self.loop.call_soon_threadsafe(self.current_task.cancel)
+                    # 呼び出し時点のタスクを束縛: 遅延実行されても再開後の新ターンを巻き込まない
+                    self.loop.call_soon_threadsafe(target_task.cancel)
                 except Exception:
                     pass
         if self.current_out_q:
@@ -1050,8 +1147,13 @@ class AntigravitySession:
         if not self.active or self.loop is None or self.async_in_q is None or not self.thread or not self.thread.is_alive():
             self._start_worker()
 
+        # 再開時ハング対策: 前ターン(中断済み)を worker が完全に片付けるまで待ち、残留要求を破棄してから新ターンを投入
+        self._quiesce_previous_turn()
+        if not self.active or self.loop is None or self.async_in_q is None or not self.thread or not self.thread.is_alive():
+            self._start_worker()
         self._cancel_requested.clear()
         self._is_paused = False
+        self._turn_idle.clear()
         out_sync_q = queue.Queue()
         self.current_out_q = out_sync_q
         self.loop.call_soon_threadsafe(self.async_in_q.put_nowait, (prompt, out_sync_q))
@@ -1093,13 +1195,17 @@ class AntigravitySession:
                     break
                 yield (chunk_type, data)
         except GeneratorExit:
-            self.cancel()
+            # Half-Open ストリーム対策: 既に新ターンへ再バインド済みなら、旧ストリームの close が新ターンを cancel してはならない
+            if self.current_out_q is out_sync_q:
+                self.cancel()
             raise
         except Exception as e:
-            self.cancel()
+            if self.current_out_q is out_sync_q:
+                self.cancel()
             raise e
         finally:
-            self.current_out_q = None
+            if self.current_out_q is out_sync_q:
+                self.current_out_q = None
 
     def close(self):
         """Closes the persistent session cleanly."""

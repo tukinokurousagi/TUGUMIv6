@@ -1388,9 +1388,22 @@ def company_knowledge_publish(title: str, content: str, category: str = "シス�
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
+
+@default_loop_guard.guard
+def invoke_subagent(subagent_name: str, task_prompt: str) -> str:
+    """専門サブエージェント（researcher: 広範リサーチ/RAG調査, sysops: システム診断/特権実行, code_craftsman: 自律SWE/精密デバッグ）へタスクを委譲し、自律実行結果を取得する。
+    Args:
+        subagent_name: 委譲先サブエージェント名 ('researcher', 'sysops', 'code_craftsman')
+        task_prompt: サブエージェントへの具体的・客観的な調査または作業指示
+    """
+    from core.subagents import execute_subagent_task
+    res = execute_subagent_task(subagent_name.strip(), task_prompt.strip())
+    return json.dumps(res, ensure_ascii=False)
+
 def get_tugumi_tools() -> list:
     """Returns the list of all registered callable tools for Antigravity SDK."""
     tools = [
+        invoke_subagent,
         execute_code,
         termux_exec,
         termux_privileged_exec,

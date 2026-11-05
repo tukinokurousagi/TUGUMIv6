@@ -47,7 +47,7 @@ from interfaces.cli.dynamic_completer import TugumiRichCompleter
 # TUGUMIv6 コアモジュール
 from core.engine_manager import EngineManager
 from core.reflection_engine import ReflectionEngine
-from core.verifier import SystemVerifier
+from core.verifier import SystemVerifier, SecurityVerificationFailure
 from core.autoheal import AutoHealEngine
 from core.supervisor import Supervisor
 from core.termux_doctor import TermuxDoctor
@@ -113,6 +113,7 @@ def show_quick_menu(console: Console, mode: str = "light"):
     table.add_row("4", "/rag", "社内ナレッジ・ドキュメント深層検索＆AI回答 (/rag [質問])")
     table.add_row("5", "/research", "自律ディープリサーチ (SKILL水準レポート自動生成)")
     table.add_row("6", "/skills", "TUGUMIv6 SKILLエコシステム一覧 (/skills [keyword])")
+    table.add_row("6.5", "/subagents", "専門サブエージェント一覧・直接起動 (/subagents, /subagent)")
     table.add_row("7", "/mcp", "MCP 2.0 連携サーバー・ツール一覧 (/mcp [server])")
     table.add_row("8", "/robin", "Dark Web OSINT 自律調査・16基オニオン検索 (/robin [query])")
     table.add_row("9", "/dl", "動画/音声ダウンロード (YouTube/X/Bilibili/TikTok/etc.)")
@@ -1556,7 +1557,11 @@ def run_cli():
             # 5. システム検証 (/verify または /check)
             if user_input in ("/verify", "/check"):
                 inspector.display_tool_start("SystemVerifier", {"target": "gemini_client.py", "action": "verify_all_gates"})
-                res = verifier.verify_all_gates(os.path.join(TUGUMI_ROOT, "core", "gemini_client.py"))
+                try:
+                    res = verifier.verify_all_gates(os.path.join(TUGUMI_ROOT, "core", "gemini_client.py"))
+                except SecurityVerificationFailure as svf:
+                    # Fail-Closed: 検証不能（内部例外）は必ず「拒絶」として表示する
+                    res = {"passed": False, "message": str(svf), "details": svf.details}
                 inspector.display_tool_result("SystemVerifier", res['passed'], res.get('message', ''), res.get('details', ''))
                 console.print()
                 continue
@@ -1845,6 +1850,57 @@ def run_cli():
                     border_style="green"
                 ))
                 console.print()
+                continue
+
+            # 10.5 サブエージェント一覧・直接起動 (/subagents, /subagent)
+            if user_input.startswith("/subagents") or user_input.startswith("/subagent"):
+                from core.subagents import list_subagents_info, execute_subagent_task
+                sa_parts = user_input.split(maxsplit=2)
+                sa_cmd = sa_parts[0].lower()
+
+                # /subagent <name> <prompt> : 指定サブエージェント直接単独実行
+                if sa_cmd == "/subagent" and len(sa_parts) >= 3:
+                    target_name = sa_parts[1].strip()
+                    sa_prompt = sa_parts[2].strip()
+                    console.print(f"\n[bold #bd93f9]🤖 サブエージェント [{target_name}] を直接起動いたします...[/bold #bd93f9]")
+                    console.print(f"[dim cyan]指示: {sa_prompt}[/dim cyan]\n")
+                    inspector.display_tool_start("invoke_subagent", {"subagent_name": target_name, "task_prompt": sa_prompt})
+                    t0 = time.time()
+                    res = execute_subagent_task(target_name, sa_prompt)
+                    elapsed_sa = time.time() - t0
+                    inspector.display_tool_result("invoke_subagent", res.get("success", False), f"Finished in {elapsed_sa:.2f}s")
+                    if res.get("success"):
+                        console.print(Panel(
+                            res.get("result", ""),
+                            title=f"[bold #50fa7b]◈ Subagent [{target_name}] Execution Report ◈[/bold #50fa7b]",
+                            border_style="#50fa7b"
+                        ))
+                    else:
+                        console.print(f"[bold red]✖ サブエージェント実行エラー: {res.get('error')}[/bold red]\n")
+                    continue
+
+                # /subagents または /subagent (引数なし/ヘルプ): 一覧表示
+                sub_list = list_subagents_info()
+                sa_table = Table(
+                    title=f"[bold #bd93f9]🤖 TUGUMIv6 専門サブエージェント編成目録 ({len(sub_list)}体稼働中)[/bold #bd93f9]",
+                    border_style="#bd93f9",
+                    expand=True
+                )
+                sa_table.add_column("No", width=4, justify="center")
+                sa_table.add_column("エージェント名", style="bold #00f0ff", width=18)
+                sa_table.add_column("役割・専門領域", style="white", width=36)
+                sa_table.add_column("配備ツール", style="dim yellow")
+
+                for idx, sa in enumerate(sub_list, start=1):
+                    all_tools = sa["tools"] + [f"builtin:{bt}" for bt in sa["builtin_tools"]]
+                    tools_str = ", ".join(all_tools[:4])
+                    if len(all_tools) > 4:
+                        tools_str += f" 他{len(all_tools)-4}件"
+                    sa_table.add_row(str(idx), sa["name"], sa["description"][:60], tools_str)
+
+                console.print()
+                console.print(sa_table)
+                console.print("[dim]※ 直接実行: [white]/subagent <エージェント名> <指示>[/white] (例: /subagent researcher TUGUMI_RAGのファイル一覧)[/dim]\n")
                 continue
 
             # 11. SKILL一覧・検索 (/skills) および個別スキル検視・手動発動 (/skill)

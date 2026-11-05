@@ -399,6 +399,11 @@ class CloneSiteRequest(BaseModel):
     url: str
     name: Optional[str] = ""
     engine: Optional[str] = "auto"
+    profile_name: Optional[str] = "default"
+
+class StealthScrapeRequest(BaseModel):
+    url: str
+    profile_name: Optional[str] = "default"
 
 class ClearMemoryRequest(BaseModel):
     clear_chat: Optional[bool] = True
@@ -3409,6 +3414,34 @@ async def get_tool_log(script_name: str):
         logger.error(f"Failed to read tool log for {script_name}: {e}")
         return JSONResponse(status_code=500, content={"error": str(e), "script": script_name})
 
+# ━━━ Stealth Browser & Anti-Bot API Endpoints ━━━
+
+@app.post("/api/stealth/scrape")
+async def stealth_scrape_api(req: StealthScrapeRequest):
+    """Cloudflare / Bot検知をバイパスするステルススクレイピングAPI"""
+    url = req.url.strip()
+    if not url:
+        return JSONResponse(status_code=400, content={"error": "URLが指定されていません"})
+
+    try:
+        from tools.donut_tools import get_donut_manager
+        mgr = get_donut_manager()
+        res = await asyncio.to_thread(mgr.scrape_url, url=url)
+        return {"status": "ok", "data": res}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/api/stealth/status")
+async def stealth_status_api():
+    """Donut Browser & Termux Stealth Engine 診断ステータスAPI"""
+    try:
+        from tools.donut_tools import get_donut_manager
+        mgr = get_donut_manager()
+        health = await asyncio.to_thread(mgr.check_health)
+        return {"status": "ok", "health": health}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 # ━━━ Web Clone API Endpoints ━━━
 
 @app.post("/api/clone/create")
@@ -3421,7 +3454,13 @@ async def create_clone_site(req: CloneSiteRequest):
     try:
         from tools.web_cloner import WebCloner
         cloner = WebCloner()
-        res = await asyncio.to_thread(cloner.clone_url, url=url, custom_name=req.name or "", engine=req.engine or "auto")
+        res = await asyncio.to_thread(
+            cloner.clone_url,
+            url=url,
+            custom_name=req.name or "",
+            engine=req.engine or "auto",
+            profile_name=req.profile_name or "default"
+        )
         activity_broadcaster.broadcast("clone", {
             "action": "created",
             "site_id": res["id"],

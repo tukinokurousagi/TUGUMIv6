@@ -1379,17 +1379,22 @@
               <label style="font-size:10px;font-weight:700;color:var(--txt);margin-bottom:4px;display:block">保存名・メモ (任意)</label>
               <input id="cloneNameInput" class="clone-input" placeholder="例: yahoo_top, my_project">
             </div>
-            <div style="width:160px;min-width:140px">
+            <div style="width:180px;min-width:150px">
               <label style="font-size:10px;font-weight:700;color:var(--txt);margin-bottom:4px;display:block">レンダリングエンジン</label>
               <select id="cloneEngineSelect" class="clone-select">
-                <option value="auto">🤖 自動 (Headless Chrome優先)</option>
-                <option value="puppeteer">🎭 Puppeteer (動的SPA完全実行)</option>
-                <option value="http">⚡ 高速HTTPフェッチ</option>
+                <option value="auto">🤖 自動 (Stealth Chrome優先)</option>
+                <option value="stealth">🍩 ステルス (Cloudflare/Bot回避)</option>
+                <option value="curl_cffi">⚡ 高速TLS偽装 (JA3/JA4)</option>
+                <option value="donut">🍩 Donut Browser (Wayfern)</option>
+                <option value="http">🌐 標準HTTPフェッチ</option>
               </select>
             </div>
-            <div style="display:flex;align-items:flex-end">
-              <button class="bp" id="btnCreateClone" onclick="A.createCloneSite()" style="height:36px;white-space:nowrap;padding:0 16px;background:linear-gradient(135deg,var(--cyan),var(--pink));color:#000;font-weight:700;border:none">
+            <div style="display:flex;align-items:flex-end;gap:6px">
+              <button class="bp" id="btnCreateClone" onclick="A.createCloneSite()" style="height:36px;white-space:nowrap;padding:0 14px;background:linear-gradient(135deg,var(--cyan),var(--pink));color:#000;font-weight:700;border:none">
                 🚀 クローン生成
+              </button>
+              <button class="bp" id="btnStealthScrape" onclick="A.stealthScrape()" style="height:36px;white-space:nowrap;padding:0 12px;background:rgba(0,240,255,0.12);color:var(--cyan);border:1px solid rgba(0,240,255,0.5);font-weight:700">
+                🛡️ ステルス抽出
               </button>
             </div>
           </div>
@@ -1404,6 +1409,16 @@
               <span id="cloneTimerText" style="font-family:var(--mono);font-size:11px;color:var(--pink)">⏱️ 0.0s</span>
             </div>
             <div class="clone-progress-bar"><div class="clone-progress-bar-fill" id="cloneProgressBarFill"></div></div>
+          </div>
+
+          <!-- ステルス抽出結果表示ボックス -->
+          <div id="stealthScrapeResultBox" class="hid" style="margin-top:10px;padding:12px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,240,255,0.3);border-radius:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <span style="font-size:11px;font-weight:700;color:var(--cyan)">🛡️ ステルス抽出結果</span>
+              <button onclick="$('#stealthScrapeResultBox').classList.add('hid')" style="background:transparent;border:none;color:var(--muted);font-size:11px;cursor:pointer">✕ 閉じる</button>
+            </div>
+            <div id="stealthScrapeMeta" style="font-size:10px;color:var(--pink);margin-bottom:6px;font-family:var(--mono)"></div>
+            <pre id="stealthScrapeContent" style="max-height:180px;overflow-y:auto;font-size:11px;color:var(--txt);white-space:pre-wrap;font-family:var(--mono);background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;margin:0"></pre>
           </div>
 
           <!-- 保存済みクローンサイト一覧 -->
@@ -6646,6 +6661,69 @@ const A=(()=>{
     }
   }
 
+  async function stealthScrape(){
+    const urlInput = $('#cloneUrlInput');
+    const btn = $('#btnStealthScrape');
+    const progressBox = $('#cloneProgressBox');
+    const progressText = $('#cloneProgressText');
+    const timerText = $('#cloneTimerText');
+    const resultBox = $('#stealthScrapeResultBox');
+    const metaBox = $('#stealthScrapeMeta');
+    const contentBox = $('#stealthScrapeContent');
+
+    let url = urlInput ? urlInput.value.trim() : '';
+    if(!url){
+      toast('抽出対象のURLを入力してください', 'err');
+      urlInput?.focus();
+      return;
+    }
+    if(!url.startsWith('http://') && !url.startsWith('https://')){
+      url = 'https://' + url;
+      if(urlInput) urlInput.value = url;
+    }
+
+    if(btn) btn.disabled = true;
+    if(progressBox) progressBox.classList.remove('hid');
+    if(progressText) progressText.textContent = `🛡️ ${url} をステルス抽出中 (Cloudflare/Bot検知回避)...`;
+
+    const startTime = Date.now();
+    if(activeCloneTimer) clearInterval(activeCloneTimer);
+    activeCloneTimer = setInterval(() => {
+      const sec = ((Date.now() - startTime) / 1000).toFixed(1);
+      if(timerText) timerText.textContent = `⏱️ ${sec}s`;
+    }, 100);
+
+    try{
+      const r = await fetch('/api/stealth/scrape', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url})
+      });
+      clearInterval(activeCloneTimer);
+      const totalSec = ((Date.now() - startTime) / 1000).toFixed(2);
+
+      const d = await r.json();
+      if(d.status === 'ok' && d.data){
+        toast(`🛡️ ステルス抽出完了！ (${totalSec}秒)`, 'ok');
+        if(resultBox) resultBox.classList.remove('hid');
+        if(metaBox) metaBox.textContent = `• エンジン: ${d.data.engine || 'Stealth Native'} | 抽出文字数: ${(d.data.text || '').length}文字 (${totalSec}s)`;
+        if(contentBox) contentBox.textContent = d.data.text || '(テキストなし)';
+      }else{
+        toast(`抽出失敗: ${d.error || '不明なエラー'}`, 'err');
+        if(progressText) progressText.textContent = `❌ エラー: ${d.error || '失敗'}`;
+      }
+    }catch(e){
+      clearInterval(activeCloneTimer);
+      toast(`通信エラー: ${e.message}`, 'err');
+      if(progressText) progressText.textContent = `❌ 通信エラー: ${e.message}`;
+    }finally{
+      if(btn) btn.disabled = false;
+      setTimeout(() => {
+        if(progressBox) progressBox.classList.add('hid');
+      }, 4000);
+    }
+  }
+
   function openClonePreview(siteId, title, previewEndpoint){
     const overlay = $('#clonePreviewModalOverlay');
     const modal = $('#clonePreviewModal');
@@ -9697,7 +9775,7 @@ const A=(()=>{
     triggerLyricsFileUpload,handleLyricsFileSelect,loadLyricsFromPath,analyzeLoadedLyrics,
     openImageStudio,closeImageStudio,setStudioMode,handleStudioDrop,handleStudioFiles,removeStudioImage,executeStudioAction,triggerStudioUpload,
     openDressupStudio,loadDressupReferences,selectDressupRef,selectDressupExclusiveModel,expandModelPattern,setDressupPreset,handleDressupFileSelect,executeDressupDirect,createFreshModelDirect,setDressupResultAsNewRef,triggerDressupUpload,
-    loadClonedSites,createCloneSite,openClonePreview,openClonePreviewDirect,closeClonePreview,
+    loadClonedSites,createCloneSite,stealthScrape,openClonePreview,openClonePreviewDirect,closeClonePreview,
     reloadClonePreview,openClonePreviewNewTab,setClonePreviewDevice,deleteCloneSite,openCloneStudioDirect,
     closeConsole,clearConsole,copyConsole,closeInlineConsole,clearInlineConsole,copyInlineConsole,
     setLogCategoryFilter,ansiToHtml,purgeMemory,optDb,testModelPing,

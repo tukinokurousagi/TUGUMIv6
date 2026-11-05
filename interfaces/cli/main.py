@@ -742,6 +742,110 @@ def handle_robin_command(user_input: str, console: Console, session: PromptSessi
     console.print()
 
 
+def handle_donut_command(user_input: str, console: Console, session: PromptSession, inspector: ToolInspector, memory: SQLiteMemory, curr_mode: str = "light") -> None:
+    """Donut Browser & Termux Stealth Browser スラッシュコマンド統合ハンドラ (/donut)"""
+    from tools.donut_tools import get_donut_manager
+    from tools.web_cloner import WebCloner
+
+    p = CYBER_PALETTES.get(curr_mode, CYBER_PALETTES["light"])
+    mgr = get_donut_manager()
+    raw_args = user_input.split(maxsplit=1)[1].strip() if len(user_input.split(maxsplit=1)) > 1 else ""
+
+    # 引数なし or help の場合: HUD司令室メニュー
+    if not raw_args or raw_args.lower() in ("help", "-h", "--help"):
+        console.print(Panel(
+            f"[bold {p['primary']}]🍩 DONUT BROWSER & STEALTH ARSENAL (2026 SOTA)[/bold {p['primary']}]\n\n"
+            "[bold white]【アンチボット完全回避・高度スクレイピング・サイトクローン】[/bold white]\n"
+            "  [bold cyan]1.[/bold cyan] 🛡️ [bold green]scrape <URL>[/bold green]        : Cloudflare/Turnstile/Bot検知を突破し本文・構造を高精度抽出\n"
+            "  [bold cyan]2.[/bold cyan] 🌐 [bold yellow]clone <URL>[/bold yellow]         : 動的SPA・CSS・フォントを丸ごとオフラインHTMLクローン保存\n"
+            "  [bold cyan]3.[/bold cyan] 🩺 [bold cyan]status[/bold cyan]              : Donut Local API & Termux Stealth Engine の接続診断\n"
+            "  [bold cyan]4.[/bold cyan] 📁 [bold magenta]list[/bold magenta]                : 登録済みブラウザプロファイル一覧の表示\n"
+            "  [bold cyan]5.[/bold cyan] ⚙️ [bold #00f0ff]config [token][/bold #00f0ff]     : 接続設定（Bearerトークン・ホスト・ポート）の確認・更新\n\n"
+            "[dim]💡 ワンライナー例: /donut scrape https://example.com  |  /donut clone https://target.com[/dim]",
+            title=f"[bold {p['primary']}]◈ TUGUMIv6 × DONUT STEALTH BROWSER COMMAND CENTER ◈[/bold {p['primary']}]",
+            border_style=p["border"]
+        ))
+        console.print()
+        return
+
+    parts = raw_args.split(maxsplit=1)
+    sub = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub in ("status", "health"):
+        health = mgr.check_health()
+        t = Table(title="Donut & Stealth Engine Status", border_style=p["border"])
+        t.add_column("Property", style="bold yellow")
+        t.add_column("Status", style="green")
+        t.add_row("Local API Host", f"{health['host']}:{health['port']}")
+        t.add_row("Token Configured", "✅ True" if health["token_configured"] else "❌ False")
+        t.add_row("Donut App Connected", "✅ Online" if health["connected"] else "⚠️ Offline (Using Termux Native)")
+        t.add_row("Termux Stealth Native", "✅ Active (Puppeteer-Extra Stealth + JA3)")
+        t.add_row("Diagnostics", health["message"])
+        console.print(t)
+        console.print()
+        return
+
+    if sub in ("scrape", "fetch", "s"):
+        if not arg:
+            console.print("[bold red]URLを指定してください: /donut scrape <URL>[/bold red]")
+            return
+        target_url = arg
+        if not target_url.startswith(("http://", "https://")):
+            target_url = "https://" + target_url
+
+        with console.status(f"[bold cyan]🛡️ アンチボット回避ステルススクレイピング実行中... ({target_url})[/bold cyan]"):
+            try:
+                res = mgr.scrape_url(target_url)
+                engine = res.get("engine", "Stealth Native")
+                text = res.get("text", "")
+                console.print(Panel(
+                    f"[bold green]✔ ボット検知バイパス＆スクレイピング完了！[/bold green]\n"
+                    f"[cyan]• URL:[/] {target_url}\n"
+                    f"[cyan]• 稼働エンジン:[/] [bold yellow]{engine}[/bold yellow]\n"
+                    f"[cyan]• 抽出文字数:[/] [bold cyan]{len(text)}[/bold cyan] 文字\n\n"
+                    f"[dim]--- 抽出本文プレビュー (先頭 1500 文字) ---[/dim]\n\n{text[:1500]}",
+                    title=f"[bold {p['primary']}]◈ Stealth Scrape Result ◈[/bold {p['primary']}]",
+                    border_style="green"
+                ))
+            except Exception as e:
+                console.print(f"[bold red]スクレイピングエラー: {e}[/bold red]")
+        console.print()
+        return
+
+    if sub in ("clone", "c"):
+        if not arg:
+            console.print("[bold red]URLを指定してください: /donut clone <URL>[/bold red]")
+            return
+        target_url = arg
+        if not target_url.startswith(("http://", "https://")):
+            target_url = "https://" + target_url
+
+        with console.status(f"[bold cyan]🌐 完全動的SPAステルスクローン保存中... ({target_url})[/bold cyan]"):
+            try:
+                cloner = WebCloner()
+                meta = cloner.clone_url(target_url, engine="stealth")
+                console.print(Panel(
+                    f"[bold green]✔ サイトクローン完了！[/bold green]\n"
+                    f"[cyan]• タイトル:[/] [bold white]{meta['title']}[/bold white]\n"
+                    f"[cyan]• 稼働エンジン:[/] [bold yellow]{meta['engine']}[/bold yellow]\n"
+                    f"[cyan]• 保存サイズ:[/] {meta['size_kb']} KB\n"
+                    f"[cyan]• 保存先:[/] [bold green]{meta.get('desk_path') or meta['path']}[/bold green]",
+                    title=f"[bold {p['primary']}]◈ Stealth Site Clone ◈[/bold {p['primary']}]",
+                    border_style="green"
+                ))
+            except Exception as e:
+                console.print(f"[bold red]クローンエラー: {e}[/bold red]")
+        console.print()
+        return
+
+    if sub.startswith(("http://", "https://")) or "." in sub:
+        user_input_fix = f"/donut scrape {raw_args}"
+        handle_donut_command(user_input_fix, console, session, inspector, memory, curr_mode)
+        return
+
+    console.print(f"[bold yellow]未知のサブコマンド: {sub}。ヘルプは `/donut` を実行してください。[/bold yellow]\n")
+
 
 def run_cli():
     parser = argparse.ArgumentParser(description="TUGUMIv6 Cyberpunk Master CLI")
@@ -1858,6 +1962,18 @@ def run_cli():
             # 11.9 Robin MCP Dark Web OSINT スラッシュコマンド (/robin)
             if user_input.startswith("/robin"):
                 handle_robin_command(
+                    user_input=user_input,
+                    console=console,
+                    session=session,
+                    inspector=inspector,
+                    memory=memory,
+                    curr_mode=curr_mode
+                )
+                continue
+
+            # 11.95 Donut Browser & Stealth Browser スラッシュコマンド (/donut, /stealth)
+            if user_input.startswith(("/donut", "/stealth")):
+                handle_donut_command(
                     user_input=user_input,
                     console=console,
                     session=session,

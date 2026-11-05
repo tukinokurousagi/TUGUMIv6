@@ -48,6 +48,7 @@ MAIN_COMMANDS: Dict[str, str] = {
     "/photo": "超リアル実写美女モデル生成ショートカット",
     "/dl": "動画/音声ダウンロード (YouTube/X/Bilibili/TikTok/etc.)",
     "/clone": "GitHub自動クローン＆自律エラー修復 (/clone [URL])",
+    "/donut": "🍩 Donut & Stealth Browser アンチボット自動化 (/donut [scrape/clone/status])",
     "/robin": "Dark Web OSINT 自律調査・16基オニオン検索 (/robin [query/health/list])",
     "/research": "自律ディープリサーチ (SKILL水準レポート自動生成)",
     "/rag": "社内ナレッジ・ドキュメント深層検索＆AI回答 (/rag [質問])",
@@ -114,6 +115,14 @@ ROBIN_META: Dict[str, str] = {
     "health": "🩺 Torプロキシ＆AIモデル＆16基エンジンの死活監視 (/robin health)",
     "list": "📂 過去のダークウェブ調査レポート履歴一覧 (/robin list)",
     "models": "🤖 Robin MCP で利用可能なAIモデル一覧 (/robin models)",
+}
+
+DONUT_META: Dict[str, str] = {
+    "scrape": "🛡️ アンチボット完全回避スクレイピング (/donut scrape <URL>)",
+    "clone": "🌐 動的SPA完全HTMLクローン保存 (/donut clone <URL>)",
+    "status": "🩺 Donut Local API & Termux Stealth 診断 (/donut status)",
+    "list": "📁 登録プロファイル一覧 (/donut list)",
+    "config": "⚙️ 接続設定の確認・更新 (/donut config)",
 }
 
 DOCTOR_META: Dict[str, str] = {
@@ -330,6 +339,17 @@ class TugumiRichCompleter(Completer):
                         start_position=-len(sub_word),
                         display=r_name,
                         display_meta=r_meta
+                    )
+
+        # B3. /donut
+        elif base_cmd in ("/donut", "/stealth"):
+            for d_name, d_meta in DONUT_META.items():
+                if d_name.lower().startswith(sub_word):
+                    yield Completion(
+                        text=d_name,
+                        start_position=-len(sub_word),
+                        display=d_name,
+                        display_meta=d_meta
                     )
 
         # C. /model

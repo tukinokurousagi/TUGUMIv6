@@ -1,25 +1,37 @@
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 """
-TUGUMIv6 Web Cloner Engine
+TUGUMIv6 Web Cloner Engine (2026 Stealth & Anti-Detect Edition)
 - Clones target websites capturing rendered DOM, styles, and assets
-- Dual-engine architecture: Headless Chromium (Puppeteer) with urllib fallback
+- Multi-engine architecture:
+    1. Stealth Chromium (Puppeteer-Extra Stealth - Cloudflare/Bot-Detection Bypassed)
+    2. Donut Browser (Wayfern Anti-Detect Engine)
+    3. TLS Impersonator (curl_cffi Chrome124 JA3/JA4)
+    4. Lightweight HTTP Fallback
 - Base href injection for flawless asset rendering
 - Persistence to ~/cloned_sites and TUGUMIDesk sync
 """
 
+from __future__ import annotations
+
+import json
+import logging
 import os
 import re
-import json
-import time
 import shutil
-import urllib.request
-import urllib.parse
 import subprocess
+import time
+import urllib.parse
+import urllib.request
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Any
+
+from curl_cffi import requests as cffi_requests
+
+logger = logging.getLogger("TUGUMI.WebCloner")
+
 
 class WebCloner:
-    """Production-grade Web Page Cloner for TUGUMIv6"""
+    """Production-grade Web Page Cloner for TUGUMIv6 with Stealth & Anti-Bot Bypassing."""
 
     DEFAULT_CLONE_DIR = os.path.expanduser("~/cloned_sites")
     DESK_CLONE_DIR = "/storage/emulated/0/TUGUMIDesk/クローンサイト"
@@ -27,41 +39,45 @@ class WebCloner:
     NODE_PATH = "/data/data/com.termux/files/usr/bin/node"
     MCP_NODE_MODULES = "/data/data/com.termux/files/home/.mcp/node_modules"
 
-    def __init__(self, clone_dir: Optional[str] = None):
+    def __init__(self, clone_dir: str | None = None) -> None:
         self.clone_dir = os.path.abspath(clone_dir or self.DEFAULT_CLONE_DIR)
         os.makedirs(self.clone_dir, exist_ok=True)
         if os.path.exists("/storage/emulated/0/TUGUMIDesk"):
             try:
                 os.makedirs(self.DESK_CLONE_DIR, exist_ok=True)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     def _sanitize_name(self, text: str) -> str:
         """フォルダ名・ファイル名用サニタイズ"""
-        clean = re.sub(r'[^\w\-_.]', '_', text.strip())
+        clean = re.sub(r"[^\w\-_.]", "_", text.strip())
         return clean[:40] or "site"
 
     def _extract_title(self, html: str) -> str:
         """HTMLからtitleタグのテキストを抽出"""
-        m = re.search(r'<title[^>]*>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
+        m = re.search(
+            r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL
+        )
         if m:
-            clean = re.sub(r'<[^>]+>', '', m.group(1)).strip()
+            clean = re.sub(r"<[^>]+>", "", m.group(1)).strip()
             return clean[:100]
         return "Untitled Page"
 
     def _inject_base_tag(self, html: str, base_url: str) -> str:
         """相対パスの画像・CSS・フォントを正しく読み込ませるためのbaseタグとUTF-8を注入"""
-        # Ensure utf-8 meta tag exists
         meta_tag = '<meta charset="utf-8">\n'
         base_tag = f'<base href="{base_url}">\n'
 
-        # Check if base tag already exists
-        if re.search(r'<base\s+href=', html, re.IGNORECASE):
-            # Replace existing base href
-            html = re.sub(r'<base\s+href=[\'"][^\'"]*[\'"][^>]*>', base_tag, html, count=1, flags=re.IGNORECASE)
+        if re.search(r"<base\s+href=", html, re.IGNORECASE):
+            html = re.sub(
+                r"<base\s+href=[\'\"][^\'\"]*[\'\"][^>]*>",
+                base_tag,
+                html,
+                count=1,
+                flags=re.IGNORECASE,
+            )
         else:
-            # Insert after <head>
-            head_m = re.search(r'<head[^>]*>', html, re.IGNORECASE)
+            head_m = re.search(r"<head[^>]*>", html, re.IGNORECASE)
             if head_m:
                 idx = head_m.end()
                 html = html[:idx] + "\n" + meta_tag + base_tag + html[idx:]
@@ -70,35 +86,49 @@ class WebCloner:
 
         return html
 
-    def clone_with_puppeteer(self, url: str, timeout: int = 120) -> str:
-        """Puppeteer + Headless Chromium による完全SPA/JSレンダリング・DOM取得"""
-        if not os.path.exists(self.CHROMIUM_PATH) or not os.path.exists(self.NODE_PATH):
+    def clone_with_stealth_puppeteer(
+        self,
+        url: str,
+        timeout: int = 120,
+        profile_name: str = "default",
+    ) -> str:
+        """Puppeteer-Extra Stealth + Headless Chromium によるボット検知回避クローン"""
+        if not os.path.exists(self.CHROMIUM_PATH) or not os.path.exists(
+            self.NODE_PATH
+        ):
             raise RuntimeError("Chromium or Node.js binary not found")
 
-        # Inline Node.js script using puppeteer-core
+        profile_dir = os.path.join(
+            os.path.expanduser("~/.config/stealth_browser/profiles"),
+            profile_name,
+        )
+        os.makedirs(profile_dir, exist_ok=True)
+
         js_code = f"""
-const puppeteer = require('puppeteer-core');
-const fs = require('fs');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 (async () => {{
     const browser = await puppeteer.launch({{
         executablePath: '{self.CHROMIUM_PATH}',
         headless: true,
+        userDataDir: {json.dumps(profile_dir)},
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--disable-extensions'
+            '--window-size=1920,1080'
         ]
     }});
     try {{
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Linux; Android 14; Termux) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36');
-        await page.setViewport({{ width: 1280, height: 800 }});
+        await page.setViewport({{ width: 1920, height: 1080 }});
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36');
         
-        await page.goto({json.dumps(url)}, {{ waitUntil: 'domcontentloaded', timeout: {timeout * 1000} }});
-        await new Promise(r => setTimeout(r, 1500));
+        await page.goto({json.dumps(url)}, {{ waitUntil: 'networkidle0', timeout: {timeout * 1000} }});
+        await new Promise(r => setTimeout(r, 2500));
         
         const html = await page.evaluate((baseUrl) => {{
             const baseTag = document.createElement('base');
@@ -117,207 +147,236 @@ const fs = require('fs');
         await browser.close();
     }}
 }})().catch(err => {{
-    console.error('PuppeteerError:', err.message);
+    console.error('StealthPuppeteerError:', err.message);
     process.exit(1);
 }});
 """
-        env = {
-            **os.environ,
-            "NODE_PATH": self.MCP_NODE_MODULES,
-            "TERM": "dumb"
-        }
+        cmd = [self.NODE_PATH, "-e", js_code]
+        env = os.environ.copy()
+        env["NODE_PATH"] = self.MCP_NODE_MODULES
+
         res = subprocess.run(
-            [self.NODE_PATH, "-e", js_code],
+            cmd,
             capture_output=True,
             text=True,
-            timeout=timeout + 5,
-            env=env
+            env=env,
+            timeout=timeout + 30,
+            cwd="/data/data/com.termux/files/home/.mcp",
+            check=False,
         )
-        if res.returncode != 0 or not res.stdout.strip():
-            err_msg = res.stderr.strip() or "Puppeteer exited with non-zero code"
-            raise RuntimeError(f"Puppeteer failed: {err_msg}")
 
-        return res.stdout
+        if res.returncode != 0:
+            raise RuntimeError(f"Stealth Puppeteer failed: {res.stderr.strip()}")
 
-    def clone_with_http(self, url: str, timeout: int = 60) -> str:
-        """HTTPフェッチによる高速軽量クローン (フォールバック用)"""
+        html = res.stdout
+        if not html or len(html.strip()) < 50:
+            raise RuntimeError("Puppeteer returned empty HTML output")
+
+        return html
+
+    def clone_with_curl_cffi(self, url: str) -> str:
+        """curl_cffi (Chrome 124 JA3/JA4 TLS Impersonate) による超高速ボット回避フェッチ"""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        }
+        res = cffi_requests.get(
+            url, impersonate="chrome124", headers=headers, timeout=25
+        )
+        if res.status_code != 200:
+            raise RuntimeError(f"HTTP {res.status_code}: {res.reason}")
+        return self._inject_base_tag(res.text, url)
+
+    def clone_with_http(self, url: str) -> str:
+        """urllib による標準フォールバック"""
         req = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Linux; Android 14; Termux) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8"
-            }
+                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+            },
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content_type = resp.headers.get("Content-Type", "")
-            encoding = "utf-8"
-            if "charset=" in content_type:
-                encoding = content_type.split("charset=")[-1].split(";")[0].strip()
-            raw_data = resp.read()
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            encoding = (
+                resp.headers.get_content_charset()
+                or "utf-8"
+            )
             try:
-                html = raw_data.decode(encoding)
-            except Exception:
-                html = raw_data.decode("utf-8", errors="replace")
+                html = raw.decode(encoding, errors="replace")
+            except Exception:  # noqa: BLE001
+                html = raw.decode("utf-8", errors="replace")
 
         return self._inject_base_tag(html, url)
 
-    def clone_url(self, url: str, custom_name: str = "", engine: str = "auto", timeout: int = 120) -> Dict[str, Any]:
-        """指定URLのクローンサイトを生成・保存"""
-        url = url.strip()
-        if not url.startswith("http://") and not url.startswith("https://"):
-            url = "https://" + url
+    def clone_url(
+        self,
+        url: str,
+        custom_name: str = "",
+        engine: str = "auto",
+        profile_name: str = "default",
+    ) -> dict[str, Any]:
+        """指定URLのページを完全クローンし保存する
 
+        Args:
+            url: クローン対象URL
+            custom_name: 任意のサイト名
+            engine: 'auto', 'stealth', 'donut', 'curl_cffi', 'http'
+            profile_name: 認証セッションを永続化するプロファイル名
+
+        Returns:
+            クローンされたサイト情報の辞書
+        """
         parsed = urllib.parse.urlparse(url)
-        domain = parsed.netloc or "website"
-        now = datetime.now()
-        timestamp_str = now.strftime("%Y%m%d_%H%M%S")
-        
-        name_part = self._sanitize_name(custom_name) if custom_name else self._sanitize_name(domain)
-        site_id = f"{timestamp_str}_{name_part}"
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(f"無効なURL形式です: {url}")
+
+        t0 = time.time()
+        html = ""
+        engine_used = ""
+
+        # Engine Dispatch
+        if engine in ("stealth", "puppeteer", "auto", "donut"):
+            try:
+                html = self.clone_with_stealth_puppeteer(
+                    url, profile_name=profile_name
+                )
+                engine_used = (
+                    "Stealth Chromium (Puppeteer-Extra Stealth)"
+                )
+            except Exception as e:
+                logger.warning("Stealth Puppeteer failed: %s", e)
+                if engine != "auto":
+                    raise
+
+        if not html:
+            try:
+                html = self.clone_with_curl_cffi(url)
+                engine_used = "curl_cffi (JA3/JA4 Chrome124 Impersonate)"
+            except Exception as e:  # noqa: BLE001
+                logger.warning("curl_cffi failed: %s", e)
+                html = self.clone_with_http(url)
+                engine_used = "HTTP Standard Fallback"
+
+        title = self._extract_title(html)
+        elapsed = round(time.time() - t0, 2)
+
+        # Generate unique folder ID
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_domain = self._sanitize_name(parsed.netloc)
+        site_id = f"{ts}_{safe_domain}"
+        if custom_name:
+            site_id = f"{site_id}_{self._sanitize_name(custom_name)}"
+
         site_dir = os.path.join(self.clone_dir, site_id)
         os.makedirs(site_dir, exist_ok=True)
 
-        html_content = ""
-        engine_used = ""
-        error_notes = []
-
-        start_time = time.time()
-
-        if engine in ("auto", "puppeteer"):
-            try:
-                html_content = self.clone_with_puppeteer(url, timeout=timeout)
-                engine_used = "puppeteer"
-            except Exception as e:
-                error_notes.append(f"Puppeteer attempt failed: {e}")
-                if engine == "puppeteer":
-                    raise RuntimeError(f"Puppeteer failed: {e}")
-
-        if not html_content and engine in ("auto", "http", "curl"):
-            try:
-                html_content = self.clone_with_http(url, timeout=min(timeout, 60))
-                engine_used = "http_fallback" if engine == "auto" else "http"
-            except Exception as e:
-                error_notes.append(f"HTTP fetch attempt failed: {e}")
-                raise RuntimeError(f"All cloning engines failed: {'; '.join(error_notes)}")
-
-        elapsed_sec = round(time.time() - start_time, 2)
-        title = self._extract_title(html_content)
-
-        # 保存
         index_file = os.path.join(site_dir, "index.html")
         with open(index_file, "w", encoding="utf-8") as f:
-            f.write(html_content)
+            f.write(html)
 
-        size_bytes = os.path.getsize(index_file)
-        size_kb = round(size_bytes / 1024, 1)
-
-        # メタデータ
         meta = {
             "id": site_id,
             "url": url,
             "title": title,
-            "name": custom_name or domain,
-            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "timestamp": timestamp_str,
-            "size_bytes": size_bytes,
-            "size_kb": size_kb,
+            "created_at": datetime.now().isoformat(),
+            "elapsed_sec": elapsed,
             "engine": engine_used,
-            "elapsed_sec": elapsed_sec,
+            "size_kb": round(len(html.encode("utf-8")) / 1024, 1),
+            "custom_name": custom_name,
             "path": index_file,
-            "preview_endpoint": f"/api/clone/preview/{site_id}"
         }
+        with open(
+            os.path.join(site_dir, "meta.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
 
-        meta_file = os.path.join(site_dir, "meta.json")
-        with open(meta_file, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-
-        # TUGUMIDeskへ同期 (アクセス可能な場合)
-        if os.path.exists(self.DESK_CLONE_DIR):
-            try:
-                desk_target_dir = os.path.join(self.DESK_CLONE_DIR, site_id)
-                os.makedirs(desk_target_dir, exist_ok=True)
-                shutil.copy2(index_file, os.path.join(desk_target_dir, "index.html"))
-                shutil.copy2(meta_file, os.path.join(desk_target_dir, "meta.json"))
-                meta["synced_to_desk"] = True
-            except Exception:
-                meta["synced_to_desk"] = False
-        else:
-            meta["synced_to_desk"] = False
+        # Sync to TUGUMIDesk
+        try:
+            desk_dest = os.path.join(self.DESK_CLONE_DIR, f"{site_id}.html")
+            shutil.copy2(index_file, desk_dest)
+            meta["desk_path"] = desk_dest
+            # media scan
+            subprocess.run(
+                ["termux-media-scan", desk_dest],
+                capture_output=True,
+                check=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("TUGUMIDesk sync notice: %s", e)
 
         return meta
 
-    def list_cloned_sites(self) -> List[Dict[str, Any]]:
-        """保存されたクローンサイト一覧を取得（新しい順）"""
+    def list_cloned_sites(self) -> list[dict[str, Any]]:
+        """保存されている全クローンサイト一覧をメタデータとともに取得"""
+        results = []
         if not os.path.exists(self.clone_dir):
-            return []
+            return results
 
-        sites = []
-        for entry in os.listdir(self.clone_dir):
-            site_path = os.path.join(self.clone_dir, entry)
-            if not os.path.isdir(site_path):
+        for d in sorted(os.listdir(self.clone_dir), reverse=True):
+            p = os.path.join(self.clone_dir, d)
+            if not os.path.isdir(p):
                 continue
-            meta_file = os.path.join(site_path, "meta.json")
-            index_file = os.path.join(site_path, "index.html")
+            meta_file = os.path.join(p, "meta.json")
+            index_file = os.path.join(p, "index.html")
             if os.path.exists(meta_file):
                 try:
-                    with open(meta_file, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-                    sites.append(meta)
-                    continue
-                except Exception:
+                    with open(meta_file, encoding="utf-8") as f:
+                        data = json.load(f)
+                        data["path"] = index_file
+                        results.append(data)
+                        continue
+                except Exception:  # noqa: BLE001, S110
                     pass
 
             if os.path.exists(index_file):
-                # Fallback meta if meta.json was missing
-                sites.append({
-                    "id": entry,
+                results.append({
+                    "id": d,
                     "url": "N/A",
-                    "title": entry,
-                    "name": entry,
-                    "created_at": datetime.fromtimestamp(os.path.getmtime(index_file)).strftime("%Y-%m-%d %H:%M:%S"),
-                    "size_bytes": os.path.getsize(index_file),
+                    "title": d,
+                    "created_at": "",
                     "size_kb": round(os.path.getsize(index_file) / 1024, 1),
-                    "engine": "unknown",
                     "path": index_file,
-                    "preview_endpoint": f"/api/clone/preview/{entry}"
+                    "engine": "unknown",
                 })
 
-        # 新しい順にソート
-        sites.sort(key=lambda s: s.get("created_at", ""), reverse=True)
-        return sites
+        return results
 
-    def get_cloned_site(self, site_id: str) -> Optional[Dict[str, Any]]:
-        """特定のクローンサイトのメタデータおよびHTMLファイルパスを取得"""
-        site_dir = os.path.join(self.clone_dir, site_id)
-        index_file = os.path.join(site_dir, "index.html")
-        if not os.path.exists(index_file):
+    def get_cloned_site(self, site_id: str) -> dict[str, Any] | None:
+        """指定IDのクローンサイト情報を取得"""
+        p = os.path.join(self.clone_dir, site_id)
+        if not os.path.exists(p):
             return None
-
-        meta_file = os.path.join(site_dir, "meta.json")
+        meta_file = os.path.join(p, "meta.json")
+        index_file = os.path.join(p, "index.html")
         if os.path.exists(meta_file):
             try:
-                with open(meta_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
+                with open(meta_file, encoding="utf-8") as f:
+                    data = json.load(f)
+                    data["path"] = index_file
+                    return data
+            except Exception:  # noqa: BLE001, S110
                 pass
-
         return {
             "id": site_id,
             "url": "N/A",
             "title": site_id,
             "path": index_file,
-            "preview_endpoint": f"/api/clone/preview/{site_id}"
         }
 
     def delete_cloned_site(self, site_id: str) -> bool:
-        """クローンサイトの削除"""
-        site_dir = os.path.join(self.clone_dir, site_id)
-        if os.path.exists(site_dir) and os.path.isdir(site_dir):
-            shutil.rmtree(site_dir, ignore_errors=True)
-            # Remove from desk if present
-            desk_dir = os.path.join(self.DESK_CLONE_DIR, site_id)
-            if os.path.exists(desk_dir):
-                shutil.rmtree(desk_dir, ignore_errors=True)
+        """指定IDのクローンサイトを完全削除"""
+        p = os.path.join(self.clone_dir, site_id)
+        if os.path.exists(p) and os.path.isdir(p):
+            shutil.rmtree(p, ignore_errors=True)
+            # Remove from TUGUMIDesk if present
+            desk_dest = os.path.join(self.DESK_CLONE_DIR, f"{site_id}.html")
+            if os.path.exists(desk_dest):
+                try:
+                    os.remove(desk_dest)
+                except Exception:  # noqa: BLE001, S110
+                    pass
             return True
         return False

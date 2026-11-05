@@ -12,7 +12,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 try:
     import trafilatura
@@ -32,11 +32,13 @@ class DeepResearchEngine:
     5. Dual Output & Category Routing (Markdown + 美麗Tailwind HTML を TUGUMIDesk へ自動分類保存)
     """
 
-    CATEGORIES = {
+    CATEGORIES: ClassVar[dict[str, str]] = {
         "ai": "AI・エージェント",
         "agent": "AI・エージェント",
+        "antigravity": "AI・エージェント",
         "mcp": "AI・エージェント",
         "llm": "AI・エージェント",
+        "gemini": "AI・エージェント",
         "system": "システム開発",
         "dev": "システム開発",
         "infra": "システム開発",
@@ -63,22 +65,33 @@ class DeepResearchEngine:
         "briefing": "デイリーブリーフィング",
         "ui": "UIデザイン",
         "design": "UIデザイン",
+        "tailwind": "UIデザイン",
         "clone": "クローンサイト",
         "shared": "共有フォルダ",
     }
 
     def __init__(self, gemini_client=None, timeout: float = 60.0):
-        self.gemini = gemini_client
+        if gemini_client is not None:
+            self.gemini = gemini_client
+        else:
+            try:
+                from core.gemini_client import GeminiClient
+                self.gemini = GeminiClient()
+            except Exception:  # noqa: BLE001
+                self.gemini = None
         self.timeout = timeout
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 14; Termux; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
 
     def detect_category(self, query: str) -> str:
         """クエリ内容からTUGUMIDeskの最適保存フォルダ（16大分類）を自動判定"""
         q_lower = query.lower()
         for kw, cat in self.CATEGORIES.items():
-            if kw in q_lower:
+            if len(kw) <= 2:
+                if re.search(r"(?:^|[^a-zA-Z0-9])" + re.escape(kw) + r"(?:[^a-zA-Z0-9]|$)", q_lower):
+                    return cat
+            elif kw in q_lower:
                 return cat
         if any(w in query for w in ["乃木坂", "櫻坂", "日向坂", "アイドル", "タレント", "芸能"]):
             return "アイドル・エンタメ"
@@ -169,7 +182,7 @@ class DeepResearchEngine:
                     "snippet": clean_snippet,
                     "source": "DuckDuckGo"
                 })
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         return results
 
@@ -192,58 +205,140 @@ class DeepResearchEngine:
                         "snippet": f"報道日時: {pub}",
                         "source": "GoogleNews"
                     })
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         return results
 
+    def _extract_og_image(self, html: str, url: str) -> str:
+        """HTML内から代表画像 (OGP / Twitter Card) を抽出"""
+        for pat in [
+            r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
+            r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']',
+            r'<meta\s+name=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']',
+            r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']twitter:image["\']',
+        ]:
+            m = re.search(pat, html, re.IGNORECASE)
+            if m:
+                candidate = m.group(1).strip()
+                if candidate.startswith("//"):
+                    return "https:" + candidate
+                if candidate.startswith("http"):
+                    return candidate
+                if url:
+                    return urllib.parse.urljoin(url, candidate)
+        return ""
+
     def fetch_page_content(self, url: str, max_chars: int = 8000) -> str:
-        """一次ソースWebページの高精度本文・OGP画像・メタデータ抽出（Trafilatura優先・8000文字）"""
+        """一次ソースWebページの高精度本文・OGP画像・メタデータ抽出
+
+        【3重多層ステルス取得パイプライン】
+        1. 高速 TLS/JA3/JA4 偽装 (curl_cffi Chrome 124) + Trafilatura 深層抽出
+        2. 標準 urllib + Trafilatura / BeautifulSoup フォールバック
+        3. 自律ステルスブラウザ (Donut Browser / Termux Headless Stealth Chromium) による DOM完全描画・ボット検知自動突破
+        """
         if not url or not url.startswith("http"):
             return ""
+
+        # Tier 1: 高速 TLS 指紋偽装 (curl_cffi Chrome 124)
         try:
-            req = urllib.request.Request(url, headers=self.headers)
-            with urllib.request.urlopen(req, timeout=min(self.timeout, 45.0)) as resp:
-                html = resp.read().decode("utf-8", errors="replace")
+            from curl_cffi import requests as cffi_requests
 
-            og_image = ""
-            for pat in [
-                r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
-                r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']',
-                r'<meta\s+name=["\']twitter:image["\']\s+content=["\']([^"\']+)["\']'
-            ]:
-                m = re.search(pat, html, re.IGNORECASE)
-                if m:
-                    candidate = m.group(1).strip()
-                    if candidate.startswith("//"):
-                        og_image = "https:" + candidate
-                    elif candidate.startswith("http"):
-                        og_image = candidate
-                    elif url:
-                        og_image = urllib.parse.urljoin(url, candidate)
-                    break
-
-            # 1. Trafilatura 高精度抽出
-            if trafilatura:
-                extracted = trafilatura.extract(html, include_comments=False, include_tables=True, output_format="txt")
-                if extracted:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            }
+            res = cffi_requests.get(url, impersonate="chrome124", headers=headers, timeout=min(self.timeout, 15.0))
+            if res.status_code == 200 and len(res.text) > 300:
+                html = res.text
+                og_image = self._extract_og_image(html, url)
+                extracted = ""
+                meta_str = ""
+                if trafilatura:
+                    extracted = trafilatura.extract(html, include_comments=False, include_tables=True, output_format="txt") or ""
                     meta = trafilatura.extract_metadata(html)
-                    meta_str = ""
                     if meta and meta.title:
                         meta_str += f"【タイトル】: {meta.title}\n"
                     if not og_image and meta and meta.image:
                         og_image = meta.image
-                    if og_image:
-                        meta_str += f"【代表画像/OGP】: {og_image}\n"
-                    return (meta_str + extracted)[:max_chars]
 
-            # 2. フォールバック
-            cleaned = re.sub(r'<(script|style|nav|footer|header)[^>]*>.*?</\1>', '', html, flags=re.DOTALL)
-            text = re.sub(r'<[^>]+>', ' ', cleaned)
-            text = re.sub(r'\s+', ' ', text).strip()
-            fallback_meta = f"【代表画像/OGP】: {og_image}\n" if og_image else ""
-            return (fallback_meta + text)[:max_chars]
-        except Exception:
-            return ""
+                if og_image:
+                    meta_str += f"【代表画像/OGP】: {og_image}\n"
+
+                is_challenge = any(
+                    k in (extracted or html).lower()
+                    for k in [
+                        "turnstile",
+                        "captcha",
+                        "verify you are human",
+                        "checking your browser",
+                        "just a moment",
+                        "cf-ray",
+                        "access denied",
+                        "attention required",
+                    ]
+                )
+                if extracted and len(extracted) > 150 and not is_challenge:
+                    return (meta_str + extracted)[:max_chars]
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        # Tier 2: 標準 urllib + Trafilatura
+        try:
+            req = urllib.request.Request(url, headers=self.headers)
+            with urllib.request.urlopen(req, timeout=min(self.timeout, 20.0)) as resp:
+                html = resp.read().decode("utf-8", errors="replace")
+
+            og_image = self._extract_og_image(html, url)
+            extracted = ""
+            meta_str = ""
+            if trafilatura:
+                extracted = trafilatura.extract(html, include_comments=False, include_tables=True, output_format="txt") or ""
+                meta = trafilatura.extract_metadata(html)
+                if meta and meta.title:
+                    meta_str += f"【タイトル】: {meta.title}\n"
+                if not og_image and meta and meta.image:
+                    og_image = meta.image
+
+            if og_image:
+                meta_str += f"【代表画像/OGP】: {og_image}\n"
+
+            is_challenge = any(
+                k in (extracted or html).lower()
+                for k in [
+                    "turnstile",
+                    "captcha",
+                    "verify you are human",
+                    "checking your browser",
+                    "just a moment",
+                    "cf-ray",
+                    "access denied",
+                    "attention required",
+                ]
+            )
+            if extracted and len(extracted) > 150 and not is_challenge:
+                return (meta_str + extracted)[:max_chars]
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        # Tier 3: 自律ステルスブラウザ (Donut Browser / Termux Stealth Chromium)
+        try:
+            from tools.donut_tools import get_donut_manager
+
+            mgr = get_donut_manager()
+            res = mgr.scrape_url(url)
+            stealth_text = res.get("text", "").strip()
+            engine_name = res.get("engine", "Stealth Native")
+            title = res.get("title", "")
+            if stealth_text and len(stealth_text) > 80:
+                header = f"【アンチボット・ステルスエンジン ({engine_name}) による自動救済抽出】\n"
+                if title:
+                    header += f"【タイトル】: {title}\n"
+                return (header + stealth_text)[:max_chars]
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        return ""
 
     def run_research_pipeline(
         self,
@@ -281,7 +376,7 @@ class DeepResearchEngine:
                     res = fut.result()
                     if res:
                         raw_hits.extend(res)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
         # 重複URLの除去
@@ -317,7 +412,7 @@ class DeepResearchEngine:
                         res = fut.result()
                         if res:
                             source_texts.append(res)
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
 
         report_step("SYNTHESIS", "Gemini 3.8 Flash (High Thinking) による多角推論・深層推稿中...")
@@ -332,7 +427,7 @@ class DeepResearchEngine:
             if rag_bundle.get("has_hits") and rag_bundle.get("context_text"):
                 rag_reference_block = rag_bundle["context_text"]
                 report_step("RAG", f"ローカルRAG知識ベース連動: {rag_bundle.get('summary_label', '')}")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
         if rag_reference_block:
@@ -407,7 +502,7 @@ class DeepResearchEngine:
                     system_instruction=system_prompt,
                     thinking_level="high"
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 report_md = f"# 【調査レポート】{topic}\n\n生成エラーが発生しました: {e}\n"
         else:
             report_md = f"# 【調査レポート】{topic}\n\nGemini クライアントが初期化されていません。\n"
@@ -448,6 +543,14 @@ class DeepResearchEngine:
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_content)
 
+        # Android メディアスキャン即時反映 (termux-media-scan)
+        try:
+            import subprocess
+
+            subprocess.run(["termux-media-scan", str(md_path), str(html_path)], capture_output=True, timeout=5, check=False)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
         report_step("DONE", f"Markdown & HTML デュアル保存完了: {category}/{filename_md}")
 
         return {
@@ -460,6 +563,14 @@ class DeepResearchEngine:
             "sources_count": len(source_texts),
             "char_count": len(report_md)
         }
+
+    def investigate(
+        self,
+        topic: str,
+        progress_cb: Callable[[str, str], None] | None = None
+    ) -> dict[str, Any]:
+        """Web UI (Gemini Live) およびバックグラウンド調査用互換エントリーポイント"""
+        return self.run_research_pipeline(topic=topic, progress_cb=progress_cb)
 
     def render_beautiful_html(self, title: str, markdown_content: str, category: str = "リサーチ") -> str:
         """
@@ -507,7 +618,7 @@ class DeepResearchEngine:
                 body_parts.append(f'<h2 class="text-xl sm:text-2xl font-bold mt-7 mb-3 text-pink-400 border-b border-slate-800 pb-2">{line_str[3:]}</h2>')
             elif line_str.startswith("### "):
                 body_parts.append(f'<h3 class="text-lg sm:text-xl font-semibold mt-5 mb-2 text-slate-100">{line_str[4:]}</h3>')
-            elif line_str.startswith("- ") or line_str.startswith("* "):
+            elif line_str.startswith(("- ", "* ")):
                 body_parts.append(f'<li class="ml-6 list-disc text-slate-300 my-1 leading-relaxed">{line_str[2:]}</li>')
             elif line_str.startswith("|"):
                 # テーブル

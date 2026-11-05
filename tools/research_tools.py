@@ -70,7 +70,7 @@ class ResearchTools:
                         "pub_date": pub_date.strip(),
                         "source": source.strip()
                     })
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             results.append({"error": str(e), "query": query})
         return results
 
@@ -105,7 +105,7 @@ class ResearchTools:
                     "url": link.strip(),
                     "snippet": clean_snippet
                 })
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
         # 2. Yahoo Japan Organic Search Fallback
@@ -138,7 +138,7 @@ class ResearchTools:
                         results.append({"title": title, "url": link, "snippet": snippet})
                         if len(results) >= max_results:
                             break
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         # 3. Google News RSS Fallback
@@ -162,7 +162,7 @@ class ResearchTools:
                                 r["image_url"] = img_match.group(1).strip()
                         else:
                             r["extracted_body"] = ""
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         r["extracted_body"] = ""
 
         return results
@@ -216,8 +216,25 @@ class ResearchTools:
             text = re.sub(r'<[^>]+>', ' ', cleaned)
             text = re.sub(r'\s+', ' ', text).strip()
             fallback_meta = f"【代表画像/OGP】: {og_image}\n" if og_image else ""
+
+            # Check for Cloudflare / Bot Wall keywords
+            if any(k in text.lower() for k in ["turnstile", "captcha", "verify you are human", "checking your browser", "cf-ray", "access denied"]) or len(text) < 100:
+                raise RuntimeError("Bot detection or Cloudflare challenge encountered")
+
             return fallback_meta + text[:4000]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            # Autonomous Stealth Browser & Anti-Bot Fallback (Donut / Stealth Chromium)
+            try:
+                from tools.donut_tools import get_donut_manager
+                mgr = get_donut_manager()
+                res = mgr.scrape_url(url)
+                stealth_text = res.get("text", "").strip()
+                engine_name = res.get("engine", "Stealth Native")
+                if stealth_text:
+                    prefix = f"【アンチボット自動回避エンジン ({engine_name}) による抽出】\n"
+                    return prefix + stealth_text[:8000]
+            except Exception as stealth_e:  # noqa: BLE001
+                return f"[Error fetching URL {url}: {e} (Stealth Fallback Error: {stealth_e})]"
             return f"[Error fetching URL {url}: {e}]"
 
     def format_professional_report(self, title: str, summary: str, evidence: list[str], details: str) -> str:
@@ -369,7 +386,7 @@ class ResearchTools:
                     processed_md,
                     extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 body_html = None
 
         if not body_html:

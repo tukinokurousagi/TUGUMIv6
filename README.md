@@ -1,5 +1,9 @@
 # TUGUMIv6 (つぐみ v6) - Autonomous Omni AI Agent Architecture
 
+<p align="center">
+  <img src="docs/assets/tsugumi_thum.png" alt="つぐみ (TUGUMI)" width="360" />
+</p>
+
 Android Termux (Linux aarch64) 環境に最適化された商用グレードの自律型オムニAIエージェントフレームワーク。
 Antigravity CLI / SWE Autonomous Agent 水準の認知アーキテクチャ、MCP 2.0 (Model Context Protocol) 統合、4層エビングハウス記憶システム、リアルタイムWebUI/CLI、そして多重安全防護を備えています。
 

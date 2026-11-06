@@ -91,53 +91,88 @@ try:
 except ImportError:
     SelfEvolutionEngine = None
 
+# Termux 実機特化スラッシュコマンド群
+from interfaces.cli.commands.termux_commands import (
+    execute_shell_passthrough,
+    handle_latest_screenshot_analysis,
+    handle_clipboard_copy,
+    handle_clipboard_paste,
+    handle_native_open,
+    handle_native_share,
+    show_cyber_battery_hud,
+    handle_webui_control,
+    handle_app_inspector,
+    handle_instant_find,
+    show_top_processes,
+    get_latest_screenshot
+)
+
 
 def show_quick_menu(console: Console, mode: str = "light"):
-    """リッチでサイバーなクイックアクションパレット (実用25機能完全網羅・トイ機能排除)"""
+    """リッチでサイバーなクイックアクションパレット (Termux実機直結＆カテゴリ別統合HUD)"""
     p = CYBER_PALETTES.get(mode, CYBER_PALETTES["light"])
     
     table = Table(
-        title=f"[bold {p['primary']}]⚡ TUGUMIv6 QUICK ACTION PALETTE (実用25機能) ⚡[/bold {p['primary']}]",
+        title=f"[bold {p['primary']}]⚡ TUGUMIv6 QUICK ACTION PALETTE (実用・Termux特化カテゴリ別) ⚡[/bold {p['primary']}]",
         border_style=p["border"],
         show_header=True,
         header_style=f"bold {p['secondary']}",
         expand=True
     )
-    table.add_column("Key", style=f"bold {p['primary']}", width=5, justify="center")
-    table.add_column("Command", style="cyan", width=12)
+    table.add_column("Cat", style=f"bold {p['primary']}", width=4, justify="center")
+    table.add_column("Command", style="cyan", width=14)
     table.add_column("Description", style="white")
 
-    table.add_row("1", "/status", "Termuxシステム診断 (CPU/RAM/Storage/Battery/Shizuku)")
-    table.add_row("2", "/doctor", "Termux環境自律整備＆修復 (プロセス回収/ゴミ掃除/Phantom)")
-    table.add_row("3", "/memory", "多層長期記憶の確認・検索・最適化 (指示/好み/エピソード)")
-    table.add_row("4", "/rag", "社内ナレッジ・ドキュメント深層検索＆AI回答 (/rag [質問])")
-    table.add_row("5", "/research", "自律ディープリサーチ (SKILL水準レポート自動生成)")
-    table.add_row("6", "/skills", "TUGUMIv6 SKILLエコシステム一覧 (/skills [keyword])")
-    table.add_row("6.5", "/subagents", "専門サブエージェント一覧・直接起動 (/subagents, /subagent)")
-    table.add_row("7", "/mcp", "MCP 2.0 連携サーバー・ツール一覧 (/mcp [server])")
-    table.add_row("8", "/robin", "Dark Web OSINT 自律調査・16基オニオン検索 (/robin [query])")
-    table.add_row("9", "/dl", "動画/音声ダウンロード (YouTube/X/Bilibili/TikTok/etc.)")
-    table.add_row("10", "/music", "楽曲自動作曲・編曲・MIDI/WAV伴奏・ボーカル生成 (/music)")
-    table.add_row("11", "/image", "実写美女・ポートレート・画像生成・編集・合成 (/image)")
-    table.add_row("12", "/clone", "GitHub自動クローン＆自律エラー修復 (/clone [URL])")
-    table.add_row("13", "/save", "現在の会話セッションをTUGUMIDeskへ保存 (/save [タイトル])")
-    table.add_row("14", "/heal", "自律修復・健全性回復 (全コード構文スキャン＆自動修復)")
-    table.add_row("15", "/evolve", "自己進化エンジン (SOTA知見探知・監査・RAG注入)")
-    table.add_row("16", "/verify", "納品前5層検証ゲート自己診断テスト実行")
-    table.add_row("17", "/income", "完全自律不労所得パイプライン・DeFiスプレッド監視")
-    table.add_row("18", "/briefing", "インテリジェント・デイリーブリーフィング即時生成・予約")
-    table.add_row("19", "/context", "コンテキスト消費・履歴剪定ステータス (ContextGuard)")
-    table.add_row("20", "/thinking", "推論思考強度切替 (High ⇄ Medium ⇄ Low ⇄ Minimal)")
-    table.add_row("21", "/reflect", "失敗の内省・5 Whys・Failure Guardログ表示")
-    table.add_row("22", "/fpf", "第一原理推論・前提鮮度監査・認識的負債排除 (FPF Core v6)")
-    table.add_row("23", "/dark", "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)")
-    table.add_row("24", "/eval", "Antigravity E2E自己診断・品質テスト実行")
-    table.add_row("25", "/senior", "シニアエンジニア業務遂行規約・5大行動規範・検証ゲート確認")
-    table.add_row("0", "Cancel", "メニューを閉じて対話に戻る")
+    # 1. Termux実機・スマホ直結
+    table.add_row("📱", "$ <cmd>", "Termuxシェル直結実行 ($ ls, $ git diff, /sh)")
+    table.add_row("📸", "/ss [質問]", "最新スクショ自動検出＆Gemini Vision視覚解析")
+    table.add_row("📋", "/copy (/cp)", "直前のつぐみの回答をスマホクリップボードへコピー")
+    table.add_row("📋", "/paste (/clip)", "スマホクリップボード内容を取得・プロンプト確認")
+    table.add_row("📱", "/open <path|last>", "Android標準ビュワー・ブラウザでファイルを開く")
+    table.add_row("📤", "/share <path|last>", "Android共有ダイアログでファイルをLINE等へ共有")
+    table.add_row("🔋", "/battery (/power)", "スマホバッテリー残量・温度・電圧リアルタイムHUD")
+    table.add_row("🌐", "/web [start|stop]", "TUGUMIv6 WebUIサーバー (Port 8086) 完全制御")
+    table.add_row("📱", "/app (/pwa)", "PWAアプリアイコン健康診断＆更新手順案内")
+    table.add_row("🔍", "/find <query>", "社内武器庫・コマンド・ポート・カタログ即時逆引き")
+    table.add_row("📊", "/top (/ps)", "Termux実行中プロセス＆メモリ監視HUD")
+    table.add_row("📝", "/diff (/git)", "Git作業ディレクトリ変更・差分ハイライト表示")
+
+    # 2. AI推論・思考・セッション
+    table.add_row("🧠", "/model", "推論モデル切替 (gemini-3.8-flash ⇄ gemini-4-argon)")
+    table.add_row("⚡", "/thinking", "推論思考強度切替 (High ⇄ Medium ⇄ Low ⇄ Minimal)")
+    table.add_row("🎙️", "/voice", "Gemini Live 女性ボイス(12種)＆トーン設定")
+    table.add_row("🎯", "/goal <目標>", "自律完遂ゴールモード (5層検証合格まで徹底遂行)")
+    table.add_row("🔄", "/session", "常駐 AntigravitySession 状態検視・リセット")
+    table.add_row("🗜️", "/compact", "対話履歴のロスレス圧縮・トークン節約")
+    table.add_row("💰", "/credits (/cost)", "実測トークン＆日本円料金 (JPY) 詳細確認")
+
+    # 3. リサーチ・ナレッジ・調査
+    table.add_row("🔬", "/research", "自律ディープリサーチ (SKILL水準レポート自動生成)")
+    table.add_row("📖", "/rag [質問]", "社内ナレッジ・ドキュメント深層検索＆AI回答")
+    table.add_row("🕵️", "/robin [query]", "Dark Web OSINT 自律調査・16基オニオン検索")
+    table.add_row("🍩", "/donut [scrape]", "Donut Browser アンチボット完全回避スクレイピング")
+    table.add_row("📰", "/briefing", "インテリジェント・デイリーブリーフィング生成")
+    table.add_row("🧠", "/memory", "多層長期記憶の確認・検索・最適化 (指示/好み)")
+
+    # 4. クリエイティブ・メディア
+    table.add_row("👗", "/image (/photo)", "超リアル実写美女モデル・ポートレート生成")
+    table.add_row("🎵", "/music (/compose)", "楽曲自動作曲・編曲・MIDI/WAV伴奏・ボーカル生成")
+    table.add_row("📺", "/dl <URL>", "動画/音声ダウンロード (YouTube/X/Bilibili/etc.)")
+    table.add_row("🚀", "/clone <URL>", "GitHub自動クローン＆自律エラー修復")
+
+    # 5. システム保守・整備
+    table.add_row("🩺", "/doctor", "Termux環境自律整備＆修復 (プロセス/ゴミ掃除)")
+    table.add_row("📊", "/status (/sys)", "Termuxシステム健全性診断 (CPU/RAM/Storage)")
+    table.add_row("🧩", "/skills [word]", "TUGUMIv6 SKILLエコシステム全61種一覧・検索")
+    table.add_row("🔌", "/mcp [server]", "MCP 2.0 連携サーバー・ツール一覧")
+    table.add_row("🤖", "/subagents", "専門サブエージェント一覧・直接起動")
+    table.add_row("🩹", "/heal", "全コード構文スキャン＆自律自己修復")
+    table.add_row("🧬", "/evolve", "自己進化エンジン (SOTA探知・監査・RAG注入)")
+    table.add_row("⚡", "/dark (/light)", "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)")
 
     console.print()
     console.print(table)
-    console.print()
+    console.print(f"[dim]※ コマンドはTABキーで補完と詳細説明が表示されます。[/dim]\n")
 
 
 def render_skills_cli(console: Console, mode: str = "light", query: str = ""):
@@ -1026,6 +1061,8 @@ def run_cli():
 
     console.print("[cyber.dim]💡 '/' でコマンド補完、空Enterでクイックパレット表示。タスク実行中はESCで一時停止・プロンプト追加可能。[/cyber.dim]\n")
 
+    last_assistant_response: str = ""
+
     # 3. メイン対話ループ
     while True:
         try:
@@ -1086,6 +1123,81 @@ def run_cli():
                     user_input = menu_map[choice]
                 else:
                     continue
+
+            # ── Termux 実機直結・画期的スラッシュコマンド群 ──
+            # 1. Termux シェル直結実行 ($ cmd, ! cmd, /sh cmd, /bash cmd)
+            if user_input.startswith(("$", "!")) or user_input.startswith(("/sh", "/bash")):
+                execute_shell_passthrough(user_input, console, mode=curr_mode)
+                continue
+
+            # 2. 最新スクショ自動ビジョン解析 (/ss [質問], /screenshot [質問])
+            if user_input.startswith(("/ss", "/screenshot")):
+                ss_parts = user_input.split(maxsplit=1)
+                ss_query = ss_parts[1] if len(ss_parts) > 1 else ""
+                handle_latest_screenshot_analysis(ss_query, engine, console, mode=curr_mode)
+                continue
+
+            # 3. クリップボード操作 (/copy, /cp, /paste, /clip)
+            if user_input.startswith(("/copy", "/cp")):
+                handle_clipboard_copy(last_assistant_response, console, mode=curr_mode)
+                continue
+            if user_input.startswith(("/paste", "/clip")):
+                clip_text = handle_clipboard_paste(console, mode=curr_mode)
+                continue
+
+            # 4. Android ネイティブアプリ起動＆共有 (/open, /share)
+            if user_input.startswith("/open"):
+                op_parts = user_input.split(maxsplit=1)
+                op_target = op_parts[1] if len(op_parts) > 1 else "last"
+                handle_native_open(op_target, None, console, mode=curr_mode)
+                continue
+            if user_input.startswith("/share"):
+                sh_parts = user_input.split(maxsplit=1)
+                sh_target = sh_parts[1] if len(sh_parts) > 1 else "last"
+                handle_native_share(sh_target, None, console, mode=curr_mode)
+                continue
+
+            # 5. スマホハードウェア＆バッテリーHUD (/battery, /power)
+            if user_input.startswith(("/battery", "/power")):
+                show_cyber_battery_hud(console, mode=curr_mode)
+                continue
+
+            # 6. TUGUMIv6 WebUI サーバー制御 (/web)
+            if user_input.startswith("/web"):
+                w_parts = user_input.split(maxsplit=1)
+                w_sub = w_parts[1] if len(w_parts) > 1 else "status"
+                handle_webui_control(w_sub, console, mode=curr_mode)
+                continue
+
+            # 7. PWA / アプリアイコン診断 (/app, /pwa)
+            if user_input.startswith(("/app", "/pwa")):
+                handle_app_inspector(console, mode=curr_mode)
+                continue
+
+            # 8. 社内武器庫・カタログ即時逆引き (/find)
+            if user_input.startswith("/find"):
+                f_parts = user_input.split(maxsplit=1)
+                f_query = f_parts[1] if len(f_parts) > 1 else ""
+                handle_instant_find(f_query, console, mode=curr_mode)
+                continue
+
+            # 9. Termux プロセス＆メモリ監視HUD (/top, /ps)
+            if user_input.startswith(("/top", "/ps")):
+                show_top_processes(console, mode=curr_mode)
+                continue
+
+            # 10. Android トースト通知 (/toast)
+            if user_input.startswith("/toast"):
+                t_parts = user_input.split(maxsplit=1)
+                t_msg = t_parts[1] if len(t_parts) > 1 else "TUGUMIv6 からの通知です🌸"
+                subprocess.run(["termux-toast", t_msg], capture_output=True)
+                console.print(f"[bold green]✔ トースト通知を表示しました:[/] [white]{t_msg}[/white]\n")
+                continue
+
+            # 11. Git作業差分ハイライト表示 (/diff, /git)
+            if user_input.startswith(("/diff", "/git")):
+                execute_shell_passthrough("git status -s && git diff --stat", console, mode=curr_mode)
+                continue
 
             # 終了コマンド (/exit, /quit, exit, quit, q)
             if user_input.lower() in ("/exit", "/quit", "exit", "quit", "q"):
@@ -3451,6 +3563,7 @@ def run_cli():
 
             # アシスタント発言記録
             memory.add_message("assistant", full_response, mode=curr_mode)
+            last_assistant_response = full_response
 
             # 拓磨様の発言・指示から重要事実・好みを自律検知して長期記憶に定着
             try:

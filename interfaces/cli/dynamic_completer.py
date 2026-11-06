@@ -16,6 +16,32 @@ from prompt_toolkit.document import Document
 
 # 1. コマンド定義と分かりやすい日本語説明文 (Display Meta)
 MAIN_COMMANDS: Dict[str, str] = {
+    # ── Termux 実機直結・画期的コマンド群 ──
+    "$": "⚡ Termuxシェル直結パススルー実行 ($ <cmd> 例: $ ls -la)",
+    "!": "⚡ Termuxシェル直結パススルー実行 (! <cmd> 例: ! git status)",
+    "/sh": "⚡ Termuxシェル直結実行 (/sh <cmd>)",
+    "/bash": "⚡ Termuxシェル直結実行ショートカット",
+    "/ss": "📸 最新スクショ自動検出＆Gemini Vision視覚解析 (/ss [質問])",
+    "/screenshot": "最新スクショ視覚解析ショートカット (/ss と同等)",
+    "/copy": "📋 直前のつぐみの回答をスマホクリップボードへ一発コピー (/copy)",
+    "/cp": "クリップボードコピーショートカット (/copy と同等)",
+    "/paste": "📋 スマホクリップボードの内容を取得・表示・質問 (/paste)",
+    "/clip": "クリップボード取得ショートカット (/paste と同等)",
+    "/open": "📱 Android標準アプリ(ビュワー/ブラウザ)で開く (/open <path|last>)",
+    "/share": "📤 Android共有ダイアログでファイルを共有 (/share <path|last>)",
+    "/battery": "🔋 スマホバッテリー残量・温度・充電状態HUD (/battery)",
+    "/power": "バッテリー＆端末電源HUDショートカット (/battery と同等)",
+    "/web": "🌐 TUGUMIv6 WebUIサーバー完全制御 (/web [start|stop|status|open])",
+    "/app": "📱 PWAアプリアイコン健康診断＆更新手順 (/app)",
+    "/pwa": "PWAアイコン診断ショートカット (/app と同等)",
+    "/find": "🔍 社内武器庫・コマンド・ポート・カタログ即時逆引き (/find <query>)",
+    "/top": "📊 Termux実行中プロセス＆メモリ監視HUD (/top)",
+    "/ps": "Termuxプロセス一覧ショートカット (/top と同等)",
+    "/toast": "💬 Androidトースト通知を画面にポップアップ (/toast <msg>)",
+    "/diff": "📝 Git作業ディレクトリ差分・変更一覧表示 (/diff)",
+    "/git": "Gitステータス・差分確認ショートカット (/diff と同等)",
+
+    # ── コアセッション＆推論制御 ──
     "/reset": "常駐セッション記憶を初期化 (DB履歴は保持)",
     "/clear": "画面クリア＆会話DB履歴・セッション完全リフレッシュ",
     "/new": "新規会話セッション開始 (/clear と同等)",
@@ -168,6 +194,14 @@ EVOLVE_META: Dict[str, str] = {
     "audit": "🩺 6大ドメイン・システムアーキテクチャ深層監査 (/evolve audit)",
     "fast": "⚡ 高速自己進化サイクル実行 (SOTA探知＋合成＋高速検証: /evolve fast [topic])",
     "run": "🚀 フル5フェーズ自己進化サイクル実行 (/evolve run [topic])",
+}
+
+WEB_META: Dict[str, str] = {
+    "start": "WebUIサーバーをバックグラウンド起動＆ブラウザ自動展開",
+    "stop": "WebUIサーバーを停止してポート8086を解放",
+    "status": "WebUIサーバーの稼働状態・PID・URLを確認",
+    "open": "ブラウザで WebUI (http://127.0.0.1:8086/) を開く",
+    "restart": "WebUIサーバーを再起動",
 }
 
 
@@ -368,6 +402,17 @@ class TugumiRichCompleter(Completer):
                         start_position=-len(sub_word),
                         display=d_name,
                         display_meta=d_meta
+                    )
+
+        # B4. /web
+        elif base_cmd == "/web":
+            for w_name, w_meta in WEB_META.items():
+                if w_name.lower().startswith(sub_word):
+                    yield Completion(
+                        text=w_name,
+                        start_position=-len(sub_word),
+                        display=w_name,
+                        display_meta=w_meta
                     )
 
         # C. /model

@@ -19,7 +19,8 @@ import unicodedata
 from rich.console import Console
 from rich.theme import Theme
 from rich.panel import Panel
-from rich.table import Table
+from rich.cells import cell_len
+from rich.text import Text
 
 # ==============================================================================
 # 1. ANSI Colors & Cyberpunk Style Palette (CLIv5 Compatible & Upgraded)
@@ -308,42 +309,27 @@ def get_rich_console(mode: str = "light") -> Console:
 
 def print_cyber_banner(console: Console, mode: str = "light", show_matrix: bool = False, model_name: str = "gemini-3.8-flash"):
     """
-    リッチでサイバーなASCIIロゴ＆システムHUDヘッダーを画面幅に合わせて描画
-    スマホ縦画面（44カラム〜）でも絶対に折り返さず、端正に表示されるレスポンシブ設計
+    現代の最高峰AIエージェントに相応しい洗練された統合Hero Headerを描画
+    - スラントASCIIロゴとシステムテレメトリを二重囲みせず1つの端正なサイバーカードに統合
+    - スマホ縦画面（44カラム〜）からPC広幅（76〜90カラム）まで East Asian Width 防衛で完全追従
     """
     palette_cfg = CYBER_PALETTES.get(mode, CYBER_PALETTES["light"])
-    term_width = get_terminal_width()
-
-    # 1. サイバーASCIIアートロゴ出力（スマホ縦画面・44カラム〜対応）
-    subtitle = palette_cfg.get("subtitle", "AUTONOMOUS OMNI-AGENT // DEDICATED TO MASTER TAKUMA")
+    term_width = min(get_terminal_width(), 76)
+    is_dark = (mode == "dark")
+    border_col = palette_cfg["border"]
+    primary = palette_cfg["primary"]
+    secondary = palette_cfg["secondary"]
     status_text = palette_cfg.get("status_badge", "ONLINE")
+    header_tag = palette_cfg.get("header_tag", "TUGUMI v6 // SAKURA_NEURAL 🌸")
+    sub_title = "☠ 拓磨様専属 タクティカルデッキ" if is_dark else "🌸 拓磨様専属 自律型オムニAI"
+    hud_model = format_hud_model_name(model_name)
+    model_label = f"{hud_model} (TTC HIGH)"
+    engine_label = "Antigravity Black-Ice Core" if is_dark else "Antigravity SDK Native"
 
-    if create_ascii_logo and term_width >= 42:
-        try:
-            # text="TUGUMI" にすることで slant フォントが幅41文字でジャストフィットし、潰れ・崩れを根絶
-            logo_width = min(term_width, 76)
-            logo = create_ascii_logo(
-                text="TUGUMI",
-                palette=palette_cfg["logo_palette"],
-                font="slant",
-                frame="cyber_hud",
-                header_tag=f"{palette_cfg['header_tag']} // v6.0",
-                subtitle=subtitle,
-                status_text=status_text,
-                width=logo_width,
-                bold=True
-            )
-            print(logo)
-        except Exception:
-            _print_fallback_banner(console, palette_cfg, term_width)
-    else:
-        _print_fallback_banner(console, palette_cfg, term_width)
+    top_char, bottom_char = ("┌", "└") if is_dark else ("╭", "╰")
+    top_r, bottom_r = ("┐", "┘") if is_dark else ("╮", "╯")
 
-    # 2. 回路基板の描画（明示的ONの場合のみ）
-    if show_matrix:
-        print_ascii_neural_matrix(animate=False, mode=mode, model_name=model_name)
-
-    # 3. サイバーHUDシステム情報パネル（Richマークアップ完全対応ゲージ）
+    # メモリ実況取得
     mem_pct = 50
     try:
         if os.path.exists("/proc/meminfo"):
@@ -356,85 +342,95 @@ def print_cyber_banner(console: Console, mode: str = "light", show_matrix: bool 
     except Exception:
         pass
 
-    # ANSIエスケープコードではなくRichマークアップでゲージバーを構築（文字化け・改行崩れ根絶）
-    def _rich_bar(val: int, length: int = 6, bar_color: str = "#ff79c6") -> str:
-        filled = max(0, min(length, int(round(length * val / 100.0))))
-        return f"[{bar_color}]" + "█" * filled + "[dim white]" + "░" * (length - filled) + "[/]"
+    # 1. Header Line
+    title_text = Text.from_markup(f" [bold {primary}]{header_tag}[/] ")
+    title_len = cell_len(title_text.plain)
+    dash_count = max(0, term_width - 4 - title_len)
+    top_bar = Text()
+    top_bar.append(top_char + "─[", style=border_col)
+    top_bar.append_text(title_text)
+    top_bar.append("]" + "─" * dash_count + top_r, style=border_col)
+    console.print(top_bar)
 
-    is_narrow = (term_width < 60)
-    gauge_len = 4 if is_narrow else 6
-    gauge_color = "#ff0055" if mode == "dark" else "#ff79c6"
-    mem_bar = _rich_bar(mem_pct, length=gauge_len, bar_color=gauge_color)
-    health_bar = _rich_bar(100, length=gauge_len, bar_color="#50fa7b")
-
-    hud_model = format_hud_model_name(model_name)
-    table = Table.grid(padding=(0, 1), expand=True)
-
-    if is_narrow:
-        # スマホ縦画面（幅44〜59）用：折り返しゼロのコンパクト縦並びレイアウト
-        table.add_column(justify="left")
-        if mode == "dark":
-            table.add_row("[cyber.dim]OPERATOR:[/] [bold #00f0ff]拓磨様 (ROOT)[/] [bold green][ONLINE][/bold green]")
-            table.add_row(f"[cyber.dim]BRAIN   :[/] [bold #ff0055]{hud_model}[/] [cyan][HIGH][/]")
-            table.add_row("[cyber.dim]ENGINE  :[/] [bold green]Antigravity Native Core[/]")
-            table.add_row(f"[cyber.dim]MEMORY  :[/] {mem_bar} {mem_pct}%  [cyber.dim]GRID:[/] {health_bar} 100%")
-            hud_title = f"[bold {palette_cfg['primary']}]☠ BLACK_ICE TACTICAL HUD // v6 ☠[/]"
-        else:
-            table.add_row(f"[cyber.dim]Master  :[/] [bold {palette_cfg['secondary']}]拓磨様 専属パートナー[/] [bold green][ONLINE][/bold green]")
-            table.add_row(f"[cyber.dim]Brain   :[/] [bold cyan]{hud_model}[/] [dim][HIGH][/]")
-            table.add_row("[cyber.dim]Engine  :[/] [green]Antigravity SDK Native[/]")
-            table.add_row(f"[cyber.dim]Memory  :[/] {mem_bar} {mem_pct}%  [cyber.dim]Health:[/] {health_bar} 100%")
-            hud_title = f"[bold {palette_cfg['primary']}]◈ TUGUMIv6 CYBER SYSTEM HUD ◈[/]"
+    # 2. Hero Body
+    inner_width = term_width - 4
+    if term_width >= 62:
+        logo_lines = [
+            " ______  __  ________  ____  ____  ____  ",
+            "/_  __/ / / / / ____/ / / / /  |/  /  _/  ",
+            " / / / /_/ / /_/ / /_/ / / /|_/ // /     ",
+            "/_/  \\____/\\____/\\____/_/_/  /_/___/     "
+        ]
+        meta_lines = [
+            f"[{primary}]{sub_title}[/]",
+            f"[bold white]{model_label}[/]",
+            f"[green]{engine_label}[/]",
+            "[dim]Termux aarch64 · 4-Tier Memory[/]"
+        ]
+        for l, m in zip(logo_lines, meta_lines):
+            l_text = Text.from_markup(f"[{secondary}]{l}[/]")
+            m_text = Text.from_markup(m)
+            l_len = cell_len(l_text.plain)
+            m_len = cell_len(m_text.plain)
+            pad = max(1, inner_width - l_len - m_len)
+            row = Text()
+            row.append("│ ", style=border_col)
+            row.append_text(l_text)
+            row.append(" " * pad)
+            row.append_text(m_text)
+            row.append(" │", style=border_col)
+            console.print(row)
     else:
-        # ワイド画面（幅60以上）用：2カラム広々レイアウト
-        table.add_column(justify="left", ratio=1)
-        table.add_column(justify="left", ratio=1)
-        if mode == "dark":
-            table.add_row(
-                "[cyber.dim]OPERATOR:[/] [bold #00f0ff]拓磨様 (ROOT_AUTHORITY)[/]",
-                f"[cyber.dim]NEURAL_CORE:[/] [bold #ff0055]{hud_model}[/] [cyan][HIGH][/]"
-            )
-            table.add_row(
-                f"[cyber.dim]MEMORY_ICE:[/] {mem_bar} [bold #ff0055]{mem_pct}% ALLOC[/]",
-                f"[cyber.dim]DEFENSE_GRID:[/] {health_bar} [bold #00ff88]100% FORTIFIED[/]"
-            )
-            table.add_row(
-                "[cyber.dim]ENGINE_BUS:[/] [bold green]Antigravity Native Protocol[/]",
-                "[cyber.dim]AUTO_HEAL:[/] [bold yellow]TermuxDoctor Active Shield[/]"
-            )
-            table.add_row(
-                f"[cyber.dim]SECURITY:[/] {palette_cfg['mode_badge']}",
-                "[cyber.dim]SYNAPSE_DB:[/] [bold #00f0ff]4-Tier FTS5 + WAL LOCKED[/]"
-            )
-            hud_title = f"[bold {palette_cfg['primary']}]☠ BLACK_ICE TACTICAL HUD // TUGUMIv6 ☠[/]"
-        else:
-            table.add_row(
-                f"[cyber.dim]Master:[/] [bold {palette_cfg['secondary']}]拓磨様 専属パートナー[/]",
-                f"[cyber.dim]Brain:[/] [bold cyan]{hud_model}[/] [dim](Thinking HIGH)[/]"
-            )
-            table.add_row(
-                f"[cyber.dim]RAM Usage:[/] {mem_bar} [bold yellow]{mem_pct}%[/]",
-                f"[cyber.dim]System Health:[/] {health_bar} [bold green]100%[/]"
-            )
-            table.add_row(
-                "[cyber.dim]Engine:[/] [green]Antigravity SDK Native[/]",
-                "[cyber.dim]Doctor:[/] [bold yellow]TermuxDoctor Auto-Heal[/]"
-            )
-            table.add_row(
-                f"[cyber.dim]Status:[/] {palette_cfg['mode_badge']}",
-                "[cyber.dim]Memory:[/] [bold green]Multi-Tier FTS5 + WAL[/]"
-            )
-            hud_title = f"[bold {palette_cfg['primary']}]◈ TUGUMIv6 CYBER SYSTEM HUD ◈[/]"
+        # スマホ狭幅画面 (44-61 cols)
+        meta_lines = [
+            f"[{primary}]{sub_title}[/]",
+            f"[bold white]🧠 {model_label}[/]",
+            f"[green]⚡ {engine_label}[/]",
+            "[dim]📱 Termux aarch64 · 4-Tier Memory[/]"
+        ]
+        for m in meta_lines:
+            m_text = Text.from_markup(m)
+            m_len = cell_len(m_text.plain)
+            pad = max(0, inner_width - m_len)
+            row = Text()
+            row.append("│ ", style=border_col)
+            row.append_text(m_text)
+            row.append(" " * pad)
+            row.append(" │", style=border_col)
+            console.print(row)
 
-    panel = Panel(
-        table,
-        title=hud_title,
-        border_style=palette_cfg["border"],
-        padding=(0, 1),
-        width=min(term_width, 76),
-    )
-    console.print(panel)
+    # 3. Divider
+    div = Text()
+    div.append("├" + "─" * (term_width - 2) + "┤", style=border_col)
+    console.print(div)
+
+    # 4. Telemetry Bar
+    t_left = Text.from_markup(f" [green]📚 3072d RAG[/] │ [yellow]💾 RAM: {mem_pct}%[/] │ [dim]🔋 100%[/] │ [dim]💡 '/' でコマンド補完[/]")
+    t_len = cell_len(t_left.plain)
+    if t_len > inner_width:
+        t_left = Text.from_markup(f" [green]📚 3072d[/] │ [yellow]💾 {mem_pct}%[/] │ [dim]💡 '/' で補完[/]")
+        t_len = cell_len(t_left.plain)
+    t_pad = max(0, inner_width - t_len)
+    row_t = Text()
+    row_t.append("│", style=border_col)
+    row_t.append_text(t_left)
+    row_t.append(" " * t_pad)
+    row_t.append(" │", style=border_col)
+    console.print(row_t)
+
+    # 5. Bottom Status
+    status_badge = Text.from_markup(f" ❯ STATUS: [bold green]{status_text}[/] ─{bottom_r}")
+    st_len = cell_len(status_badge.plain)
+    dash_bot = max(0, term_width - 1 - st_len)
+    bot = Text()
+    bot.append(bottom_char + "─" * dash_bot, style=border_col)
+    bot.append_text(status_badge)
+    console.print(bot)
     console.print()
+
+    # 回路基板の描画（明示的ONの場合のみ）
+    if show_matrix:
+        print_ascii_neural_matrix(animate=False, mode=mode, model_name=model_name)
 
 def _print_fallback_banner(console: Console, palette_cfg: dict, term_width: int):
     p_color = palette_cfg.get("primary", "cyan")

@@ -11,8 +11,9 @@
 """
 
 from typing import Dict, Any, Optional
-from rich.panel import Panel
 from rich.console import Console
+from rich.cells import cell_len
+from rich.text import Text
 
 # Gemini 3.8 Flash 公式料金体系 (USD / 100万トークン)
 # Context <= 128k:
@@ -249,31 +250,52 @@ class TokenCostTracker:
         mode: str = "dark",
         model_name: Optional[str] = None,
     ) -> None:
-        """タスク・ターン終了時に、消費トークンと日本円料金を美しく表示"""
+        """タスク・ターン終了時に、消費トークンと日本円料金を現代のSOTAエージェント水準で美しく1行テレメトリ表示"""
         if model_name:
             self.set_model(model_name)
         cost_jpy = self.last_cost_jpy
-        cost_usd = self.last_cost_usd
         sess_jpy = self.session_cost_jpy
-        sess_usd = self.session_cost_usd
 
         # 日本円のフォーマット（極小額の場合は小数点4桁、通常は3〜2桁）
-        jpy_str = f"¥{cost_jpy:.4f}" if cost_jpy < 1.0 else f"¥{cost_jpy:.2f}"
-        sess_jpy_str = f"¥{sess_jpy:.4f}" if sess_jpy < 1.0 else f"¥{sess_jpy:.2f}"
+        jpy_str = f"¥{cost_jpy:.4f}" if cost_jpy < 0.1 else (f"¥{cost_jpy:.3f}" if cost_jpy < 1.0 else f"¥{cost_jpy:.2f}")
+        sess_jpy_str = f"¥{sess_jpy:.4f}" if sess_jpy < 0.1 else (f"¥{sess_jpy:.3f}" if sess_jpy < 1.0 else f"¥{sess_jpy:.2f}")
 
-        panel_content = (
-            f"[bold cyan]◈ 今回の消費:[/] [bold white]{self.last_turn_tokens:,}[/] tokens "
-            f"(入力: [green]{self.last_prompt_tokens:,}[/] / 出力: [yellow]{self.last_completion_tokens:,}[/]"
-            f"{f' [dim]Thinking: {self.last_thinking_tokens:,}[/dim]' if self.last_thinking_tokens else ''}) │ "
-            f"[bold yellow]料金:[/] [bold magenta]{jpy_str}[/] [dim](${cost_usd:.5f})[/dim]\n"
-            f"[bold cyan]◈ セッション累計:[/] [bold white]{self.session_total_tokens:,}[/] tokens "
-            f"({self.session_turns}ターン) │ "
-            f"[bold yellow]累計総額:[/] [bold green]{sess_jpy_str}[/] [dim](${sess_usd:.5f} @ ¥{self.usd_jpy_rate:.0f}/$)[/dim]"
-        )
+        term_width = getattr(console, "width", 80) or 80
+        is_dark = (mode == "dark")
+        accent = "#00f0ff" if is_dark else "#bd93f9"
+        primary = "#ff0055" if is_dark else "#ff79c6"
 
-        console.print(Panel(
-            panel_content,
-            title=f"[bold yellow]💰 【{self.model_label} 実測トークン＆利用料金 (JPY)】 💰[/bold yellow]",
-            border_style="yellow",
-            padding=(0, 1)
-        ))
+        th_info = f" · th: {self.last_thinking_tokens:,}" if self.last_thinking_tokens else ""
+
+        # フル詳細1行テレメトリ
+        t = Text()
+        t.append("  ✢ ", style=f"bold {accent}")
+        t.append("Turn: ", style="bold cyan")
+        t.append(f"{self.last_turn_tokens:,}", style="bold white")
+        t.append(" tok ", style="dim")
+        t.append(f"({self.last_prompt_tokens:,} in · {self.last_completion_tokens:,} out{th_info}) ", style="dim")
+        t.append("· ", style="dim")
+        t.append(jpy_str, style="bold magenta")
+        t.append(" │ ", style=f"dim {primary}")
+        t.append("Session: ", style="bold cyan")
+        t.append(f"{self.session_total_tokens:,}", style="bold white")
+        t.append(" tok · ", style="dim")
+        t.append(sess_jpy_str, style="bold green")
+        t.append(f" ({self.session_turns} turns @ {self.model_label})", style="dim")
+
+        # 画面幅オーバー時はスマート短縮
+        if cell_len(t.plain) + 4 > term_width:
+            t = Text()
+            t.append("  ✢ ", style=f"bold {accent}")
+            t.append("Turn: ", style="bold cyan")
+            t.append(f"{self.last_turn_tokens:,} tok", style="bold white")
+            t.append(f" ({jpy_str})", style="bold magenta")
+            t.append(" │ ", style=f"dim {primary}")
+            t.append("Sess: ", style="bold cyan")
+            t.append(f"{self.session_total_tokens:,} tok", style="bold white")
+            t.append(f" ({sess_jpy_str})", style="bold green")
+            t.append(f" [{self.session_turns}t]", style="dim")
+
+        console.print()
+        console.print(t)
+        console.print()

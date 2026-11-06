@@ -58,16 +58,16 @@ class ToolInspector:
                 arg_summary = f" [dim]({', '.join(items)})[/dim]"
 
         if self.mode == "dark":
-            tag = "[bold #ff0055]⚡ [TACTICAL_EXEC][/bold #ff0055]"
+            tag = "[bold #ff0055]┌ ⚡[/bold #ff0055]"
             name_style = "bold #00f0ff"
         else:
-            tag = "[bold #00f0ff]⚡ [TOOL_EXEC][/bold #00f0ff]"
+            tag = "[bold #00f0ff]┌ ⚡[/bold #00f0ff]"
             name_style = "bold yellow"
 
         self.console.print(f"  {tag} [{name_style}]{tool_name}[/{name_style}]{arg_summary}")
 
     def display_tool_result(self, tool_name: str, success: bool, summary: str, details: Optional[str] = None):
-        """ツール完了結果をスマホ最適化された洗練サイバーカード（Compact Cyber Card）で表示"""
+        """ツール完了結果をスマホ最適化された洗練ツリー（Modern Agent Tree）で表示"""
         start_t = self._start_times.pop(tool_name, None)
         duration_str = f" [dim]⏱ {time.time() - start_t:.2f}s[/dim]" if start_t else ""
 
@@ -76,16 +76,14 @@ class ToolInspector:
             clean_summary = clean_summary[:72] + "..."
 
         if self.mode == "dark":
-            status_badge = "[bold #00ff88]✔ SUCCESS[/bold #00ff88]" if success else "[bold #ff0033]✖ FAILED[/bold #ff0033]"
-            card_border = "#00ff88" if success else "#ff0033"
-            prefix = "[bold #00f0ff]›[/bold #00f0ff]"
+            status_badge = "[bold #00ff88]✔ OK[/bold #00ff88]" if success else "[bold #ff0033]✖ ERR[/bold #ff0033]"
+            prefix = "[dim #ff0055]└─[/dim #ff0055]"
         else:
-            status_badge = "[bold #00ff88]✔ OK[/bold #00ff88]" if success else "[bold #ff2255]✖ ERR[/bold #ff2255]"
-            card_border = "#50fa7b" if success else "#ff5555"
-            prefix = "[bold #bd93f9]›[/bold #bd93f9]"
+            status_badge = "[bold #50fa7b]✔ OK[/bold #50fa7b]" if success else "[bold #ff5555]✖ ERR[/bold #ff5555]"
+            prefix = "[dim #00f0ff]└─[/dim #00f0ff]"
 
-        # 1行スマートカード
-        line = f"  {prefix} [{card_border}][[/]{status_badge} [{card_border}]{tool_name}]{duration_str} [white]{escape(clean_summary)}[/white]"
+        # 1行スマートツリーカード
+        line = f"  {prefix} {status_badge} [{tool_name}]{duration_str} [dim white]› {escape(clean_summary)}[/dim white]"
         self.console.print(line)
 
         # 詳細がある場合のみ控えめに1行追加

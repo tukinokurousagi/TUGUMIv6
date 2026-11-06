@@ -16,6 +16,7 @@ import signal
 import argparse
 import time
 import re
+import subprocess
 from datetime import datetime
 from typing import Tuple
 from pathlib import Path
@@ -103,76 +104,78 @@ from interfaces.cli.commands.termux_commands import (
     handle_webui_control,
     handle_app_inspector,
     handle_instant_find,
-    show_top_processes,
-    get_latest_screenshot
+    show_top_processes
 )
 
 
 def show_quick_menu(console: Console, mode: str = "light"):
-    """リッチでサイバーなクイックアクションパレット (Termux実機直結＆カテゴリ別統合HUD)"""
+    """リッチで洗練された現代的クイックアクションパレット (Termux実機直結＆カテゴリ別統合HUD)"""
     p = CYBER_PALETTES.get(mode, CYBER_PALETTES["light"])
-    
-    table = Table(
-        title=f"[bold {p['primary']}]⚡ TUGUMIv6 QUICK ACTION PALETTE (実用・Termux特化カテゴリ別) ⚡[/bold {p['primary']}]",
+    term_width = min(getattr(console, "width", 76) or 76, 76)
+
+    table = Table.grid(padding=(0, 1), expand=True)
+
+    if term_width >= 62:
+        table.add_column("No", style="bold cyan", width=5)
+        table.add_column("Cmd", style="bold white", width=12)
+        table.add_column("Desc", style="dim", width=19)
+        table.add_column("No2", style="bold cyan", width=5)
+        table.add_column("Cmd2", style="bold white", width=12)
+        table.add_column("Desc2", style="dim", width=19)
+
+        items = [
+            (" 1", "/status", "端末診断HUD", "14", "/heal", "全コード自律修復"),
+            (" 2", "/doctor", "Termux自律整備", "15", "/evolve", "自己進化エンジン"),
+            (" 3", "/memory", "多層認知記憶", "16", "/verify", "5層検証ゲート"),
+            (" 4", "/rag", "社内ナレッジ検索", "17", "/income", "DeFi不労所得"),
+            (" 5", "/research", "ディープリサーチ", "18", "/briefing", "朝刊日報生成"),
+            (" 6", "/skills", "SKILL一覧・検索", "19", "/context", "履歴剪定ガード"),
+            (" 7", "/mcp", "MCPツール一覧", "20", "/thinking", "推論強度切替"),
+            (" 8", "/robin", "DarkWeb OSINT", "21", "/reflect", "失敗内省記録"),
+            (" 9", "/dl", "メディアDL", "22", "/fpf", "第一原理推論"),
+            ("10", "/music", "楽曲自動作曲", "23", "/dark", "表裏モード切替"),
+            ("11", "/image", "AI美女モデル", "24", "/model", "推論モデル切替"),
+            ("12", "/clone", "GitHub取得", "25", "/senior", "業務遂行規範"),
+            ("13", "/save", "対話セッション保存", " -", "$ <cmd>", "Termux外部シェル")
+        ]
+        for n1, c1, d1, n2, c2, d2 in items:
+            table.add_row(f"[{n1}]", c1, d1, f"[{n2}]", c2, d2)
+    else:
+        table.add_column("No", style="bold cyan", width=5)
+        table.add_column("Cmd", style="bold white", width=12)
+        table.add_column("Desc", style="dim")
+        narrow_items = [
+            (" 1", "/status", "端末診断HUD"),
+            (" 2", "/doctor", "Termux自律整備"),
+            (" 3", "/memory", "多層認知記憶"),
+            (" 4", "/rag", "社内ナレッジ検索"),
+            (" 5", "/research", "ディープリサーチ"),
+            (" 6", "/skills", "SKILL一覧・検索"),
+            (" 7", "/mcp", "MCPツール一覧"),
+            (" 8", "/robin", "DarkWeb OSINT"),
+            (" 9", "/dl", "メディアDL"),
+            ("10", "/music", "楽曲自動作曲"),
+            ("11", "/image", "AI美女モデル"),
+            ("14", "/heal", "全コード自律修復"),
+            ("16", "/verify", "5層検証ゲート"),
+            ("20", "/thinking", "推論強度切替"),
+            ("23", "/dark", "表裏モード切替"),
+            ("25", "/senior", "業務遂行規範")
+        ]
+        for n, c, d in narrow_items:
+            table.add_row(f"[{n}]", c, d)
+
+    panel = Panel(
+        table,
+        title=f"[bold {p['primary']}]⚡ TUGUMIv6 QUICK ACTION PALETTE ⚡[/bold {p['primary']}]",
+        subtitle="[dim]💡 番号 (1-25) またはコマンド直接入力、空Enterで戻る[/dim]",
         border_style=p["border"],
-        show_header=True,
-        header_style=f"bold {p['secondary']}",
-        expand=True
+        padding=(0, 1),
+        width=term_width
     )
-    table.add_column("Cat", style=f"bold {p['primary']}", width=4, justify="center")
-    table.add_column("Command", style="cyan", width=14)
-    table.add_column("Description", style="white")
-
-    # 1. Termux実機・スマホ直結
-    table.add_row("📱", "$ <cmd>", "Termuxシェル直結実行 ($ ls, $ git diff, /sh)")
-    table.add_row("📸", "/ss [質問]", "最新スクショ自動検出＆Gemini Vision視覚解析")
-    table.add_row("📋", "/copy", "直前のつぐみの回答をスマホクリップボードへ一発コピー")
-    table.add_row("📋", "/paste", "スマホクリップボード内容を取得・表示・質問")
-    table.add_row("📱", "/open <path|last>", "Android標準ビュワー・ブラウザでファイルを開く")
-    table.add_row("📤", "/share <path|last>", "Android共有ダイアログでファイルをLINE等へ共有")
-    table.add_row("🔋", "/battery", "スマホバッテリー残量・温度・電圧リアルタイムHUD")
-    table.add_row("🌐", "/web [sub]", "TUGUMIv6 WebUIサーバー (Port 8086) 完全制御")
-    table.add_row("📱", "/app", "PWAアプリアイコン健康診断＆更新手順案内")
-    table.add_row("🔍", "/find <query>", "社内武器庫・コマンド・ポート・カタログ即時逆引き")
-    table.add_row("📊", "/top", "Termux実行中プロセス＆メモリ監視HUD")
-    table.add_row("📝", "/diff", "Git作業ディレクトリ変更・差分ハイライト表示")
-
-    # 2. AI推論・思考・セッション
-    table.add_row("🧠", "/model", "推論モデル切替 (gemini-3.8-flash ⇄ gemini-4-argon)")
-    table.add_row("⚡", "/thinking", "推論思考強度切替 (High ⇄ Medium ⇄ Low ⇄ Minimal)")
-    table.add_row("🎙️", "/voice", "Gemini Live 女性ボイス(12種)＆トーン設定")
-    table.add_row("🎯", "/goal <目標>", "自律完遂ゴールモード (5層検証合格まで徹底遂行)")
-    table.add_row("🔄", "/session", "常駐 AntigravitySession 状態検視・リセット")
-    table.add_row("🗜️", "/compact", "対話履歴のロスレス圧縮・トークン節約")
-    table.add_row("💰", "/credits", "実測トークン＆日本円料金 (JPY) 詳細確認")
-
-    # 3. リサーチ・ナレッジ・調査
-    table.add_row("🔬", "/research", "自律ディープリサーチ (SKILL水準レポート自動生成)")
-    table.add_row("📖", "/rag [質問]", "社内ナレッジ・ドキュメント深層検索＆AI回答")
-    table.add_row("🕵️", "/robin [query]", "Dark Web OSINT 自律調査・16基オニオン検索")
-    table.add_row("🍩", "/donut [scrape]", "Donut Browser アンチボット完全回避スクレイピング")
-    table.add_row("📰", "/briefing", "インテリジェント・デイリーブリーフィング生成")
-    table.add_row("🧠", "/memory", "多層長期記憶の確認・検索・最適化 (指示/好み)")
-
-    # 4. クリエイティブ・メディア
-    table.add_row("👗", "/image", "超リアル実写美女モデル・ポートレート生成")
-    table.add_row("🎵", "/music", "楽曲自動作曲・編曲・MIDI/WAV伴奏・ボーカル生成")
-    table.add_row("📺", "/dl <URL>", "動画/音声ダウンロード (YouTube/X/Bilibili/etc.)")
-    table.add_row("🚀", "/clone <URL>", "GitHub自動クローン＆自律エラー修復")
-
-    # 5. システム保守・整備
-    table.add_row("🩺", "/doctor", "Termux環境自律整備＆修復 (プロセス/ゴミ掃除)")
-    table.add_row("📊", "/status", "Termuxシステム健全性診断 (CPU/RAM/Storage)")
-    table.add_row("🧩", "/skills [word]", "TUGUMIv6 SKILLエコシステム全61種一覧・検索")
-    table.add_row("🔌", "/mcp [server]", "MCP 2.0 連携サーバー・ツール一覧")
-    table.add_row("🤖", "/subagents", "専門サブエージェント一覧・直接起動")
-    table.add_row("🩹", "/heal", "全コード構文スキャン＆自律自己修復")
-    table.add_row("🧬", "/evolve", "自己進化エンジン (SOTA探知・監査・RAG注入)")
-    table.add_row("⚡", "/dark", "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)")
-
     console.print()
-    console.print(table)
-    console.print(f"[dim]※ コマンドはTABキーで補完と詳細説明が表示されます。[/dim]\n")
+    console.print(panel)
+    console.print()
 
 
 def render_skills_cli(console: Console, mode: str = "light", query: str = ""):
@@ -1082,16 +1085,18 @@ def run_cli():
 
             # プロンプトラベル (専属エージェント待機: 拓磨様への敬愛と忠誠スタイル)
             if curr_mode == "light":
-                prompt_text = HTML('<ansimagenta><b>🌸 拓磨様、御命令をどうぞ。</b></ansimagenta> <ansicyan><b>❯</b></ansicyan> ')
+                prompt_text = HTML('<ansimagenta><b>╰❯ 🌸 拓磨様、御命令をどうぞ › </b></ansimagenta>')
             else:
-                prompt_text = HTML('<ansired><b>☠ 拓磨様、御命令をどうぞ。</b></ansired> <ansicyan><b>❯</b></ansicyan> ')
+                prompt_text = HTML('<ansired><b>╰❯ ☠ 拓磨様、御命令をどうぞ › </b></ansired>')
 
             user_input = session.prompt(prompt_text).strip()
 
             # 空Enterでクイックアクションパレット起動
             if not user_input:
                 show_quick_menu(console, mode=curr_mode)
-                choice = session.prompt(HTML('<ansicyan><b>選択番号 (1-25, 0:戻る) &gt; </b></ansicyan>')).strip()
+                choice = session.prompt(HTML('<ansicyan><b>選択番号 (1-25, またはコマンド直接入力, 空Enter:戻る) &gt; </b></ansicyan>')).strip()
+                if not choice or choice in ("0", "q", "exit"):
+                    continue
                 menu_map = {
                     "1": "/status",
                     "2": "/doctor",
@@ -1122,7 +1127,7 @@ def run_cli():
                 if choice in menu_map:
                     user_input = menu_map[choice]
                 else:
-                    continue
+                    user_input = choice
 
             # ── Termux 実機直結・画期的スラッシュコマンド群 ──
             # 1. Termux シェル直結実行 ($ cmd, ! cmd, /sh cmd, /bash cmd)
@@ -1142,7 +1147,7 @@ def run_cli():
                 handle_clipboard_copy(last_assistant_response, console, mode=curr_mode)
                 continue
             if user_input.startswith(("/paste", "/clip")):
-                clip_text = handle_clipboard_paste(console, mode=curr_mode)
+                handle_clipboard_paste(console, mode=curr_mode)
                 continue
 
             # 4. Android ネイティブアプリ起動＆共有 (/open, /share)

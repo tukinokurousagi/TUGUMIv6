@@ -64,7 +64,7 @@ MAIN_COMMANDS: Dict[str, str] = {
     # ── 🩺 システム診断・保守・運用 ──
     "/status": "Termux＆スマホ健全性リアルタイム診断 (CPU/RAM/Battery)",
     "/doctor": "Termux環境自律整備＆修復 (プロセス回収/ゴミ掃除/Phantom)",
-    "/skills": "TUGUMIv6 SKILLエコシステム全61種一覧・検索 (/skills [word])",
+    "/skills": "TUGUMIv6 SKILLエコシステム一覧・検索 (/skills [word])",
     "/mcp": "MCP 2.0 連携サーバー・ツール一覧確認 (/mcp [server])",
     "/subagents": "専門サブエージェント編成目録一覧表示 (/subagents)",
     "/subagent": "専門サブエージェント直接単独実行 (/subagent <name> <指示>)",
@@ -78,6 +78,7 @@ MAIN_COMMANDS: Dict[str, str] = {
     "/binance": "バイナンス実口座AI自律運用・残高・相場・売買 (/binance)",
     "/income": "完全自律不労所得パイプライン・DeFiスプレッド監視",
     "/fpf": "第一原理推論・前提鮮度監査・認識的負債排除 (FPF Core v6)",
+    "/senior": "👑 シニアエンジニアクラス業務遂行規約・5大行動規範 (/senior)",
     "/dark": "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)",
     "/help": "全機能クイックアクションパレット表示",
     "/exit": "CLIセッションを終了してTermuxに戻る",

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-TUGUMIv6 Status Dock Component
-- Compact Cyberpunk HUD Bar above prompt
-- Displays Mode, Model, Tokens, Memory, and Platform Info
+TUGUMIv6 Status Dock Component (SOTA 2026 Edition)
+- Connected Modern AI Agent Status Bar directly integrated with prompt
+- Displays Mode, Model, Thinking Intensity, Tokens, Cost, Memory, and RAG
+- Zero-Overflow & East Asian Width Protection
 Dedicated to Master Takuma.
 """
 
@@ -11,11 +12,11 @@ import glob
 import shutil
 from typing import Dict, Any
 from rich.console import Console
-from rich.markup import escape
-from interfaces.cli.cyber_theme import get_display_width
+from rich.cells import cell_len
+from rich.text import Text
 
 class StatusDock:
-    """プロンプト直前に表示されるコンパクトなサイバーステータスドック"""
+    """プロンプト直前に表示される洗練されたモダンAIエージェント・ステータスバー"""
     def __init__(self, console: Console):
         self.console = console
 
@@ -70,91 +71,63 @@ class StatusDock:
         thinking_level: str = "high",
         model_name: str = "gemini-3.8-flash"
     ):
-        """ステータスドックをレンダリング (Termuxスマホ画面幅自動追従・Zero-Overflow HUD)"""
+        """プロンプトと一体化する最新SOTA AIエージェント・コネクテッドドック"""
         stats = self.get_system_stats()
         jpy_display = f"¥{cost_jpy:.4f}" if cost_jpy < 0.1 else (f"¥{cost_jpy:.3f}" if cost_jpy < 1.0 else f"¥{cost_jpy:.2f}")
 
-        ram_int = int(stats['ram'].replace("%", "")) if "%" in stats['ram'] and stats['ram'].replace("%", "").isdigit() else 45
-        filled = max(0, min(6, int(round(6 * ram_int / 100.0))))
-
-        # 実際の端末幅（Termuxスマホ画面幅）を精密取得
         term_size_cols = shutil.get_terminal_size((80, 24)).columns
         term_width = min(term_size_cols, self.console.width or 80)
-        target_w = max(34, min(term_width - 2, 76))
         th_lvl = (thinking_level or "high").upper()
 
-        # モデル短縮フォーマット (動的反映)
         m_lower = (model_name or "gemini-3.8-flash").lower()
         if "argon" in m_lower or "gemini-4" in m_lower:
-            m_label = "[bold #ff007f]4-Argon[/bold #ff007f]" if mode == "dark" else "[bold #d63384]4-Argon[/bold #d63384]"
             m_short = "4-Argon"
         elif "3.8" in m_lower or ("flash" in m_lower and "lite" not in m_lower and "3.5" not in m_lower):
-            m_label = "[bold #00f0ff]3.8-Flash[/bold #00f0ff]" if mode == "dark" else "[bold cyan]3.8-Flash[/bold cyan]"
             m_short = "3.8-Flash"
         elif "pro" in m_lower:
-            m_label = "[bold #ffb703]3.0-Pro[/bold #ffb703]" if mode == "dark" else "[bold #d97706]3.0-Pro[/bold #d97706]"
             m_short = "3.0-Pro"
         elif "lite" in m_lower or "3.5" in m_lower:
-            m_label = "[bold #98c379]3.5-Lite[/bold #98c379]" if mode == "dark" else "[bold green]3.5-Lite[/bold green]"
             m_short = "3.5-Lite"
         else:
-            m_short = m_lower.replace("gemini-", "").replace("google/", "")[:10]
-            m_label = f"[bold white]{m_short}[/bold white]"
+            m_short = m_lower.replace("gemini-", "").replace("google/", "")[:9]
 
-        # テーマ設定
-        if mode == "dark":
-            mode_badge = "☠ BLACK_ICE"
-            mode_color = "#ff0055"
-            dock_border = "#ff0055"
-            ram_bar = "[#ff0055]" + "█" * filled + "[#5c6370]" + "░" * (6 - filled) + "[/]"
-            th_color = "#00f0ff" if th_lvl == "HIGH" else ("#e5c07b" if th_lvl == "MEDIUM" else "#98c379")
-            top_char, bottom_char = "┌", "└"
-            top_corner, bottom_corner = "┐", "┘"
-        else:
-            mode_badge = "🌸 つぐみ"
-            mode_color = "#ff79c6"
-            dock_border = "#ff79c6"
-            ram_bar = "[#8be9fd]" + "█" * filled + "[#5c6370]" + "░" * (6 - filled) + "[/]"
-            th_color = "#00f0ff" if th_lvl == "HIGH" else ("#e5c07b" if th_lvl == "MEDIUM" else "#98c379")
-            top_char, bottom_char = "╭", "╰"
-            top_corner, bottom_corner = "╮", "╯"
+        is_dark = (mode == "dark")
+        border_col = "#ff0055" if is_dark else "#ff79c6"
+        primary = "#ff0055" if is_dark else "#ff79c6"
+        top_char = "┌" if is_dark else "╭"
+        top_r = "┐" if is_dark else "╮"
+        agent_tag = "☠ BLACK_ICE v6" if is_dark else "🌸 つぐみ v6"
 
-        badge_len = 5 + get_display_width(mode_badge)
-        dash_count = max(0, target_w - badge_len)
-        top_line = f"[{dock_border}]{top_char}─{escape('[')} [bold {mode_color}]{mode_badge}[/] [{dock_border}]{escape(']')}" + "─" * dash_count + f"{top_corner}[/]"
-        bottom_line = f"[{dock_border}]{bottom_char}" + "─" * max(0, target_w) + f"{bottom_corner}[/]"
+        tok_k = f"{token_count/1000:.1f}k" if token_count >= 1000 else str(token_count)
 
-        # スマホ狭画面（幅 < 54文字）の超スマート自動適応
-        if term_width < 54:
-            row_compact = (
-                f"  [bold #00f0ff]🧠[/] {m_label} │ "
-                f"[bold magenta]💾[/] {stats['ram']} │ "
-                f"[bold yellow]⚡[/] {jpy_display} │ "
-                f"[dim]T:[/] {token_count:,}"
-            )
-            self.console.print(top_line)
-            self.console.print(row_compact)
-            self.console.print(bottom_line)
-            return
+        # 優先度別バッジ群
+        b_agent = Text.from_markup(f" [bold {primary}]{agent_tag}[/] ")
+        b_model = Text.from_markup(f" [bold cyan]{m_short}[/] [dim #00f0ff]🧠{th_lvl}[/] ")
+        b_cost = Text.from_markup(f" [bold yellow]{jpy_display}[/] [dim]({tok_k})[/dim] ")
+        b_ram = Text.from_markup(f" [bold magenta]💾 {stats['ram']}[/] ")
+        b_rag = Text.from_markup(" [bold green]3072d RAG[/] ") if rag_active else Text.from_markup(" [dim]RAG:OFF[/] ")
 
-        # 標準・広幅画面
-        rag_str = "[green]3072d[/green]" if rag_active else "[dim]OFF[/dim]"
-        disk_bar = f"[#00f0ff]{stats['disk_pct']}%[/]" if stats['disk_pct'] < 85 else f"[#ff0055]{stats['disk_pct']}%[/]"
+        # 端末幅に合わせてバッジを動的選定（折り返し絶対防止）
+        dock = Text()
+        dock.append(top_char + "─[", style=border_col)
+        dock.append_text(b_agent)
+        dock.append("]─[", style=border_col)
+        dock.append_text(b_model)
+        dock.append("]", style=border_col)
 
-        row1 = (
-            f"  [bold #00f0ff]CORE:[/] {m_label} [bold {th_color}]🧠{th_lvl}[/] │ "
-            f"[bold #ff0055]RAM:[/] {ram_bar} [bold white]{stats['ram']}[/] │ "
-            f"[bold #00ff88]RAG:[/] {rag_str}"
-        )
-        row2 = (
-            f"  [bold #ffb800]TOKENS:[/] {token_count:,} │ "
-            f"[bold magenta]COST:[/] [bold magenta]{jpy_display}[/] │ "
-            f"[dim]DISK:[/] {disk_bar} │ "
-            f"[dim]PIDS:[/] [cyan]{stats['proc_cnt']}[/]"
-        )
+        candidates = [b_cost, b_ram, b_rag]
+        for c in candidates:
+            temp = Text()
+            temp.append("─[", style=border_col)
+            temp.append_text(c)
+            temp.append("]", style=border_col)
+            if cell_len(dock.plain) + cell_len(temp.plain) + 4 < term_width:
+                dock.append_text(temp)
 
-        self.console.print(top_line)
-        self.console.print(row1)
-        self.console.print(row2)
-        self.console.print(bottom_line)
+        cur_len = cell_len(dock.plain)
+        dash = max(1, term_width - 1 - cur_len)
+        dock.append("─" * dash + top_r, style=border_col)
+
+        self.console.print(dock)
+
 

@@ -48,9 +48,9 @@ class ThinkingViewer:
         self._is_thinking = True
         self._streamed_any = False
         if self.mode == "dark":
-            sys.stdout.write("\n\033[1;35m🧠 [ダークつぐみ深層推論]\033[0m \033[2m(リアルタイム思考中 / ESCで中断可能)\033[0m\n\033[2;36m")
+            sys.stdout.write("\n\033[38;2;255;0;85m┌─ 🧠 Deep Thinking (TTC: HIGH) · (ESCで一時停止) ──\033[0m\n\033[38;5;244m")
         else:
-            sys.stdout.write("\n\033[1;34m🧠 [つぐみ思考推論]\033[0m \033[2m(リアルタイム思考中 / ESCで中断可能)\033[0m\n\033[2;37m")
+            sys.stdout.write("\n\033[38;2;189;147;249m┌─ 🧠 Deep Thinking (TTC: HIGH) · (ESCで一時停止) ──\033[0m\n\033[38;5;244m")
         sys.stdout.flush()
 
     def stream_thought_chunk(self, chunk: str):
@@ -67,29 +67,23 @@ class ThinkingViewer:
             return
         self._is_thinking = False
         if self._streamed_any:
-            sys.stdout.write("\033[0m\033[2;34m⏱ [思考プロセス完了]\033[0m\n\n")
+            if self.mode == "dark":
+                sys.stdout.write("\033[0m\n\033[38;2;255;0;85m└─ ⏱ [推論完了]\033[0m\n\n")
+            else:
+                sys.stdout.write("\033[0m\n\033[38;2;189;147;249m└─ ⏱ [推論完了]\033[0m\n\n")
         else:
             sys.stdout.write("\033[0m\n")
         sys.stdout.flush()
 
     def render_response_header(self, speaker_name: str, speaker_style: str, model_name: str = "3.8-Flash"):
         """回答ストリーミング開始時のスタイリッシュなヘッダーディバイダーを描画"""
-        import shutil
-        term_size_cols = shutil.get_terminal_size((80, 24)).columns
-        term_width = min(term_size_cols, self.console.width or 80)
-        target_w = max(34, min(term_width - 2, 76))
-        
-        # モデル名短縮
         m_short = model_name.replace("gemini-", "").replace("google/", "")
+        clean_speaker = speaker_name.replace("🌸", "").replace("⚡", "").strip()
         if self.mode == "dark":
-            tag = f"[bold #ff0055]🤖 {speaker_name}[/bold #ff0055] [dim cyan]─── [{m_short}][/dim cyan]"
-            prefix_len = 12 + len(m_short)
-            divider = f"\n{tag} " + "─" * max(0, target_w - prefix_len)
+            tag = f"[bold #ff0055]●[/bold #ff0055] [bold white]{clean_speaker}[/bold white] [dim cyan]({m_short})[/dim cyan]"
         else:
-            tag = f"[bold #ff79c6]🤖 {speaker_name}[/bold #ff79c6] [dim]─── [{m_short}][/dim]"
-            prefix_len = 10 + len(m_short)
-            divider = f"\n{tag} " + "─" * max(0, target_w - prefix_len)
-        self.console.print(divider + "\n")
+            tag = f"[bold #ff79c6]●[/bold #ff79c6] [bold white]{clean_speaker}[/bold white] [dim]({m_short})[/dim]"
+        self.console.print(f"\n{tag}")
 
     def render_thinking_summary(self, thought_text: str, duration: float = 0.0):
         """完了した思考ログの描画（Claude Code / Antigravity風スマートバッジ & 思考アコーディオンパネル）"""
@@ -100,46 +94,31 @@ class ThinkingViewer:
         steps_count = len(lines)
         total_chars = len(thought_text)
 
-        # 思考ログ表示が明示的に無効化されている場合のみ、1行のコンパクトバッジを表示
-        if not self.show_thinking:
-            if self.mode == "dark":
-                badge = f"  [dim #ff0055]🧠 深層推論完了:[/] [dim cyan]⏱ {duration:.2f}s[/] [dim]({steps_count} steps, {total_chars:,}字)[/dim]"
-            else:
-                badge = f"  [dim #bd93f9]🧠 深層推論完了:[/] [dim]⏱ {duration:.2f}s ({steps_count} steps, {total_chars:,}字)[/dim]"
-            self.console.print(badge)
-            return
-
-        # 既にリアルタイムストリーミングで端末表示済みの場合は完了カプセルバッジを表示して終了
-        if getattr(self, "_streamed_any", False):
-            if self.mode == "dark":
-                badge = f"  [dim #ff0055]🧠 深層推論ストリーム完了:[/] [dim cyan]⏱ {duration:.2f}s[/] [dim]({steps_count} steps, {total_chars:,}字)[/dim]"
-            else:
-                badge = f"  [dim #bd93f9]🧠 深層推論ストリーム完了:[/] [dim]⏱ {duration:.2f}s ({steps_count} steps, {total_chars:,}字)[/dim]"
-            self.console.print(badge)
+        # 思考ログ表示が明示的に無効化されている場合、または既にリアルタイムストリーミング済みの場合は1行の洗練バッジを表示
+        if getattr(self, "_streamed_any", False) or not self.show_thinking:
+            badge_color = "#ff0055" if self.mode == "dark" else "#bd93f9"
+            self.console.print(f"  [dim {badge_color}]✢[/dim {badge_color}] [dim]Thought for {duration:.1f}s ({steps_count} steps, {total_chars:,} chars)[/dim]")
             return
 
         # ストリーミング非表示（サクサクモード）時は、思考プロセスの詳細サマリーパネルを展開描画！
-        max_preview_lines = 8
+        max_preview_lines = 5
         if len(lines) > max_preview_lines:
-            preview_lines = lines[:max_preview_lines] + [f"... (他 {len(lines) - max_preview_lines} 行 / 計 {total_chars:,} 字の思考ログ)"]
+            preview_lines = lines[:max_preview_lines] + [f"... (他 {len(lines) - max_preview_lines} 行 / 計 {total_chars:,} 字)"]
         else:
             preview_lines = lines
 
         if self.mode == "dark":
             preview = "\n".join([f"[#ff0055]❯[/#ff0055] [dim]{line}[/dim]" for line in preview_lines])
-            title = "[bold #ff0055]🧠 ダークつぐみ深層推論プロセス (Thinking / TTC)[/bold #ff0055]"
-            subtitle = f"[dim cyan]⏱ 思考時間: {duration:.2f}秒 │ {steps_count} steps │ {total_chars:,}字[/dim cyan]"
+            title = f"[dim #ff0055]🧠 Thought for {duration:.1f}s ({steps_count} steps)[/dim #ff0055]"
             border = "#ff0055"
         else:
             preview = "\n".join([f"[cyber.dim]›[/cyber.dim] {line}" for line in preview_lines])
-            title = "[bold #bd93f9]🧠 つぐみ思考プロセス (Thinking Transparency)[/bold #bd93f9]"
-            subtitle = f"[cyber.dim]⏱ 思考時間: {duration:.2f}秒 │ {steps_count} steps │ {total_chars:,}字[/cyber.dim]"
+            title = f"[dim #bd93f9]🧠 Thought for {duration:.1f}s ({steps_count} steps)[/dim #bd93f9]"
             border = "#6272a4"
-        
+
         panel = Panel(
             preview,
             title=title,
-            subtitle=subtitle,
             border_style=border,
             padding=(0, 1),
         )

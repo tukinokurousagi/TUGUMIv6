@@ -126,16 +126,16 @@ def show_quick_menu(console: Console, mode: str = "light"):
     # 1. Termux実機・スマホ直結
     table.add_row("📱", "$ <cmd>", "Termuxシェル直結実行 ($ ls, $ git diff, /sh)")
     table.add_row("📸", "/ss [質問]", "最新スクショ自動検出＆Gemini Vision視覚解析")
-    table.add_row("📋", "/copy (/cp)", "直前のつぐみの回答をスマホクリップボードへコピー")
-    table.add_row("📋", "/paste (/clip)", "スマホクリップボード内容を取得・プロンプト確認")
+    table.add_row("📋", "/copy", "直前のつぐみの回答をスマホクリップボードへ一発コピー")
+    table.add_row("📋", "/paste", "スマホクリップボード内容を取得・表示・質問")
     table.add_row("📱", "/open <path|last>", "Android標準ビュワー・ブラウザでファイルを開く")
     table.add_row("📤", "/share <path|last>", "Android共有ダイアログでファイルをLINE等へ共有")
-    table.add_row("🔋", "/battery (/power)", "スマホバッテリー残量・温度・電圧リアルタイムHUD")
-    table.add_row("🌐", "/web [start|stop]", "TUGUMIv6 WebUIサーバー (Port 8086) 完全制御")
-    table.add_row("📱", "/app (/pwa)", "PWAアプリアイコン健康診断＆更新手順案内")
+    table.add_row("🔋", "/battery", "スマホバッテリー残量・温度・電圧リアルタイムHUD")
+    table.add_row("🌐", "/web [sub]", "TUGUMIv6 WebUIサーバー (Port 8086) 完全制御")
+    table.add_row("📱", "/app", "PWAアプリアイコン健康診断＆更新手順案内")
     table.add_row("🔍", "/find <query>", "社内武器庫・コマンド・ポート・カタログ即時逆引き")
-    table.add_row("📊", "/top (/ps)", "Termux実行中プロセス＆メモリ監視HUD")
-    table.add_row("📝", "/diff (/git)", "Git作業ディレクトリ変更・差分ハイライト表示")
+    table.add_row("📊", "/top", "Termux実行中プロセス＆メモリ監視HUD")
+    table.add_row("📝", "/diff", "Git作業ディレクトリ変更・差分ハイライト表示")
 
     # 2. AI推論・思考・セッション
     table.add_row("🧠", "/model", "推論モデル切替 (gemini-3.8-flash ⇄ gemini-4-argon)")
@@ -144,7 +144,7 @@ def show_quick_menu(console: Console, mode: str = "light"):
     table.add_row("🎯", "/goal <目標>", "自律完遂ゴールモード (5層検証合格まで徹底遂行)")
     table.add_row("🔄", "/session", "常駐 AntigravitySession 状態検視・リセット")
     table.add_row("🗜️", "/compact", "対話履歴のロスレス圧縮・トークン節約")
-    table.add_row("💰", "/credits (/cost)", "実測トークン＆日本円料金 (JPY) 詳細確認")
+    table.add_row("💰", "/credits", "実測トークン＆日本円料金 (JPY) 詳細確認")
 
     # 3. リサーチ・ナレッジ・調査
     table.add_row("🔬", "/research", "自律ディープリサーチ (SKILL水準レポート自動生成)")
@@ -155,20 +155,20 @@ def show_quick_menu(console: Console, mode: str = "light"):
     table.add_row("🧠", "/memory", "多層長期記憶の確認・検索・最適化 (指示/好み)")
 
     # 4. クリエイティブ・メディア
-    table.add_row("👗", "/image (/photo)", "超リアル実写美女モデル・ポートレート生成")
-    table.add_row("🎵", "/music (/compose)", "楽曲自動作曲・編曲・MIDI/WAV伴奏・ボーカル生成")
+    table.add_row("👗", "/image", "超リアル実写美女モデル・ポートレート生成")
+    table.add_row("🎵", "/music", "楽曲自動作曲・編曲・MIDI/WAV伴奏・ボーカル生成")
     table.add_row("📺", "/dl <URL>", "動画/音声ダウンロード (YouTube/X/Bilibili/etc.)")
     table.add_row("🚀", "/clone <URL>", "GitHub自動クローン＆自律エラー修復")
 
     # 5. システム保守・整備
     table.add_row("🩺", "/doctor", "Termux環境自律整備＆修復 (プロセス/ゴミ掃除)")
-    table.add_row("📊", "/status (/sys)", "Termuxシステム健全性診断 (CPU/RAM/Storage)")
+    table.add_row("📊", "/status", "Termuxシステム健全性診断 (CPU/RAM/Storage)")
     table.add_row("🧩", "/skills [word]", "TUGUMIv6 SKILLエコシステム全61種一覧・検索")
     table.add_row("🔌", "/mcp [server]", "MCP 2.0 連携サーバー・ツール一覧")
     table.add_row("🤖", "/subagents", "専門サブエージェント一覧・直接起動")
     table.add_row("🩹", "/heal", "全コード構文スキャン＆自律自己修復")
     table.add_row("🧬", "/evolve", "自己進化エンジン (SOTA探知・監査・RAG注入)")
-    table.add_row("⚡", "/dark (/light)", "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)")
+    table.add_row("⚡", "/dark", "表裏モード瞬時切替 (つぐみ🌸 ⇄ ダークつぐみ⚡)")
 
     console.print()
     console.print(table)

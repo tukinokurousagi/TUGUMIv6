@@ -431,6 +431,16 @@ async def get_index():
             return f.read()
     return "<h1>TUGUMIv6 WebUI - index.html not found</h1>"
 
+@app.get("/favicon.ico")
+async def get_favicon():
+    fav_path = os.path.join(CURRENT_DIR, "static", "favicon.ico")
+    if os.path.exists(fav_path):
+        return FileResponse(fav_path, media_type="image/x-icon")
+    icon_path = os.path.join(CURRENT_DIR, "static", "icon-192.png")
+    if os.path.exists(icon_path):
+        return FileResponse(icon_path, media_type="image/png")
+    return JSONResponse(status_code=404, content={"error": "not found"})
+
 @app.get("/manifest.json")
 async def get_manifest():
     manifest_path = os.path.join(CURRENT_DIR, "static", "manifest.json")

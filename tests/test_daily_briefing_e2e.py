@@ -181,3 +181,25 @@ def test_08_enriched_web_intelligence():
         assert "title" in first_hit
         assert "url" in first_hit
 
+
+def test_09_deep_research_and_beautiful_html_rendering(tmp_path):
+    """DeepResearchEngine との統合および美麗Tailwind HTML生成の検証"""
+    engine = DailyBriefingEngine(workspace_root=str(tmp_path))
+    assert hasattr(engine, "deep_researcher")
+    assert engine.deep_researcher is not None
+
+    sample_md = """# ☀️ 【つぐみデイリーブリーフィング】テスト
+```mermaid
+graph TD
+    A[Deep Research Engine] --> B[Daily Briefing]
+```
+"""
+    html = engine.deep_researcher.render_beautiful_html(
+        title="テストブリーフィング",
+        markdown_content=sample_md,
+        category="デイリーブリーフィング"
+    )
+    assert isinstance(html, str)
+    assert "<!DOCTYPE html>" in html
+    assert "mermaid" in html.lower()
+

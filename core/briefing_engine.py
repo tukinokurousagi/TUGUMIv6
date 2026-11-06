@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 TUGUMIv6 Intelligent Daily Briefing Engine
 ============================================================
@@ -9,25 +8,28 @@ TUGUMIDeskに自動分類保存、スマホ通知＆音声読み上げを行う�
 ============================================================
 """
 
-import os
-import sys
-import time
-import json
 import argparse
 import datetime
+import json
+import os
 import subprocess
-import urllib.request
+import sys
+import time
 import urllib.parse
-from typing import Dict, Any, List, Optional
+import urllib.request
+from typing import Any
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 TUGUMI_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if TUGUMI_ROOT not in sys.path:
     sys.path.insert(0, TUGUMI_ROOT)
 
+from tools.research_tools import ResearchTools
+
+from core.deep_research_engine import DeepResearchEngine
 from core.engine_manager import EngineManager
-from core.termux_doctor import TermuxDoctor
 from core.notification_engine import NotificationEngine
+from core.termux_doctor import TermuxDoctor
 
 # WMO気象コードマッピング
 WMO_WEATHER_MAP = {
@@ -43,14 +45,13 @@ WMO_WEATHER_MAP = {
 class DailyBriefingEngine:
     """TUGUMIv6 インテリジェント・デイリーブリーフィング生成エンジン"""
 
-    def __init__(self, workspace_root: Optional[str] = None):
+    def __init__(self, workspace_root: str | None = None):
         self.workspace_root = workspace_root or TUGUMI_ROOT
         self.engine_mgr = EngineManager()
         self.doctor = TermuxDoctor(base_dir=self.workspace_root)
         self.notifier = NotificationEngine()
-        from tools.research_tools import ResearchTools
-        self.researcher = ResearchTools(timeout=60.0)
-
+        self.researcher = ResearchTools(timeout=45.0)
+        self.deep_researcher = DeepResearchEngine(timeout=30.0)
 
         # 保存先ディレクトリ設定（規約準拠）
         self.desk_briefing_dir = "/storage/emulated/0/TUGUMIDesk/デイリーブリーフィング"
@@ -58,7 +59,7 @@ class DailyBriefingEngine:
         os.makedirs(self.local_backup_dir, exist_ok=True)
 
     # ==================== 1. 愛知県一宮市 リアルタイム気象インテリジェンス ====================
-    def fetch_weather_intelligence(self) -> Dict[str, Any]:
+    def fetch_weather_intelligence(self) -> dict[str, Any]:
         """
         Open-Meteo API を用いて愛知県一宮市の完全リアルタイム気象・予報データを取得
         緯度: 35.3039, 経度: 136.7983 (愛知県一宮市)
@@ -183,9 +184,15 @@ class DailyBriefingEngine:
                 "error": str(e)
             }
 
-    # ==================== 2. 多角並列リアルタイムWebリサーチ ====================
-    def fetch_web_intelligence(self, custom_topics: Optional[List[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
-        """テック（フロンティアAI・自律エージェント動向）、乃木坂46・日向坂46、カルチャー等の最新一次ソースを収集"""
+    # ==================== 2. 多角並列リアルタイムWebリサーチ (Deep Research Integration) ====================
+    def fetch_web_intelligence(self, custom_topics: list[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+        """
+        DeepResearchEngine & 並列フェッチ技術を完全統合。
+        フロンティアAI・自律エージェント動向、乃木坂46・日向坂46、カルチャー等の
+        一次ソース記事本文を高速並列クローリングし、極めて解像度の高いインテリジェンスを収集。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         jst = datetime.timezone(datetime.timedelta(hours=9))
         now_jst = datetime.datetime.now(jst)
         year = now_jst.year
@@ -193,56 +200,106 @@ class DailyBriefingEngine:
         category_queries = {
             "ai_frontier": [
                 f"Google Gemini Anthropic Claude OpenAI AI {year}",
+                f"Gemini 4 Argon Gemini 3 Flash Claude 3.7 o3 LLM {year}",
                 f"LLM フロンティアモデル 最新 発表 {year}"
             ],
             "ai_agents": [
-                f"AIエージェント 自律エージェント MCP 開発 {year}",
+                f"AIエージェント 自律エージェント MCP 2.0 開発 {year}",
+                f"Google A2A 自律型エージェント テスト実行 アーキテクチャ {year}",
                 f"常時動作型AIエージェント LLM ツール {year}"
             ],
             "nogizaka46": [
-                f"乃木坂46 井上和 {year}",
-                f"乃木坂46 五百城茉央 {year}",
-                f"乃木坂46 最新 ニュース 乃木坂工事中 {year}"
+                f"乃木坂46 井上和 大河ドラマ 豊臣兄弟 声優 {year}",
+                f"乃木坂46 五百城茉央 舞台 JUMP モデル {year}",
+                f"乃木坂46 最新 ニュース 乃木坂工事中 新曲 {year}"
             ],
             "hinatazaka46": [
-                f"日向坂46 正源司陽子 {year}",
-                f"正源司陽子 映画 ゼンブオブトーキョー 雑誌 センター {year}",
-                f"日向坂46 最新 ニュース {year}",
-                f"日向坂46 金村美玖 写真集 {year}",
-                f"日向坂46 日向坂で会いましょう {year}"
+                f"日向坂46 正源司陽子 映画 ゼンブオブトーキョー センター {year}",
+                f"日向坂46 金村美玖 写真集 機微 {year}",
+                f"日向坂46 日向坂で会いましょう ライブ 最新 {year}"
             ],
             "culture": [
-                f"アニメ トレンド 話題 {year}"
+                f"アニメ トレンド 話題 {year}",
+                f"テクノロジー カルチャー 話題 {year}"
             ]
         }
 
         if custom_topics:
             category_queries["custom"] = [f"{t} 最新 ニュース {year}" for t in custom_topics]
 
-        results = {}
-        for cat_name, q_list in category_queries.items():
-            cat_hits = []
-            seen_titles = set()
-            for q in q_list:
+        def _search_query(cat: str, q: str) -> list[dict[str, Any]]:
+            hits = []
+            try:
+                res = self.researcher.search_news_rss(q, max_results=4)
+                if not res or "error" in res[0]:
+                    res = self.researcher.search_web_lite(q, max_results=4, auto_crawl=False)
+                for h in res:
+                    if "title" in h and "url" in h and "error" not in h:
+                        hits.append(h)
+            except Exception as e:
+                hits.append({"error": str(e), "query": q})
+            return hits
+
+        # 1. クエリ並列検索
+        raw_category_hits = {cat: [] for cat in category_queries}
+        search_futures = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for cat_name, q_list in category_queries.items():
+                for q in q_list:
+                    search_futures.append((cat_name, executor.submit(_search_query, cat_name, q)))
+
+            for cat_name, fut in search_futures:
                 try:
-                    # まず信頼性の高い一次ソースGoogle News RSSを優先、フォールバックでWeb検索
-                    hits = self.researcher.search_news_rss(q, max_results=4)
-                    if not hits or "error" in hits[0]:
-                        hits = self.researcher.search_web_lite(q, max_results=4, auto_crawl=True)
+                    hits = fut.result(timeout=25.0)
+                    raw_category_hits[cat_name].extend(hits)
+                except Exception:
+                    pass
 
-                    for h in hits:
-                        title = h.get("title", "").strip()
-                        if title and title not in seen_titles and "error" not in h:
-                            seen_titles.add(title)
-                            cat_hits.append(h)
-                except Exception as e:
-                    cat_hits.append({"error": str(e), "query": q})
-            results[cat_name] = cat_hits[:6]
+        # 重複除外＆上位記事の選定
+        selected_category_hits = {}
+        crawl_targets = []
 
-        return results
+        for cat_name, hit_list in raw_category_hits.items():
+            dedup = []
+            seen = set()
+            for h in hit_list:
+                url = h.get("url", "")
+                title = h.get("title", "").strip()
+                if title and url and url not in seen and "error" not in h:
+                    seen.add(url)
+                    dedup.append(h)
+            top_hits = dedup[:6]
+            selected_category_hits[cat_name] = top_hits
+            for h in top_hits[:2]:
+                if not h.get("body_summary"):
+                    crawl_targets.append(h)
+
+        # 2. 一次ソース記事本文の高速並列ディープフェッチ
+        def _fetch_body(h_item: dict[str, Any]):
+            url = h_item.get("url")
+            if not url or url.startswith("https://news.google.com/rss/articles/"):
+                return
+            try:
+                content = self.deep_researcher.fetch_page_content(url, max_chars=1200)
+                if content and len(content.strip()) > 80:
+                    cleaned = " ".join(content.split())[:600]
+                    h_item["body_summary"] = cleaned
+            except Exception:
+                pass
+
+        if crawl_targets:
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                crawl_futures = [executor.submit(_fetch_body, target) for target in crawl_targets]
+                for fut in as_completed(crawl_futures, timeout=20.0):
+                    try:
+                        fut.result()
+                    except Exception:
+                        pass
+
+        return selected_category_hits
 
     # ==================== 3. Termux & システム稼働実測メトリクス ====================
-    def fetch_system_telemetry(self) -> Dict[str, Any]:
+    def fetch_system_telemetry(self) -> dict[str, Any]:
         """TermuxDoctor から実機メトリクス（バッテリー、CPU/RAM、ストレージ等）を取得"""
         try:
             return self.doctor.inspect_all()
@@ -252,11 +309,11 @@ class DailyBriefingEngine:
     # ==================== 4. Gemini 3.8 Flash による最高峰推稿 ====================
     def generate_briefing(
         self,
-        focus_topic: Optional[str] = None,
-        note: Optional[str] = None,
+        focus_topic: str | None = None,
+        note: str | None = None,
         save_desk: bool = True,
         send_notify: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         気象・Webリサーチ・実機診断データを統合し、
         学術・専門コンサル水準のインテリジェント・デイリーブリーフィングを生成・保存
@@ -295,13 +352,19 @@ class DailyBriefingEngine:
 ・雨具アドバイス: {weather.get('umbrella_advice')}
 """
 
-        def format_snippet_list(items: List[Dict[str, Any]]) -> str:
+        def format_snippet_list(items: list[dict[str, Any]]) -> str:
             lines = []
             for h in items:
                 if "url" in h and "title" in h:
                     pub = f" [{h.get('pub_date')[:16]}]" if h.get("pub_date") else ""
                     src = f" ({h.get('source')})" if h.get("source") else ""
-                    lines.append(f"- [{h.get('title')}]({h.get('url')}): {h.get('snippet', h.get('title'))}{pub}{src}")
+                    body = h.get("body_summary")
+                    snippet = h.get("snippet", "")
+                    content_str = body if body else snippet
+                    if content_str:
+                        lines.append(f"- **[{h.get('title')}]({h.get('url')})**{pub}{src}\n  > {content_str[:300]}")
+                    else:
+                        lines.append(f"- **[{h.get('title')}]({h.get('url')})**{pub}{src}")
             return "\n".join(lines) if lines else "（最新Webスニペット取得中）"
 
         ai_frontier_snippets = format_snippet_list(web_info.get("ai_frontier", []))
@@ -467,9 +530,16 @@ class DailyBriefingEngine:
         filename_md = f"{filename_base}.md"
         filename_html = f"{filename_base}.html"
 
-        # 美麗HTMLのレンダリング
+        # 美麗HTMLのレンダリング (DeepResearchEngine & Tailwind Cyberpunk)
         briefing_title = f"☀️ 【つぐみデイリーブリーフィング】{today_formatted} インテリジェンス・サマリー"
-        html_content = self.researcher.render_beautiful_html(briefing_title, report_markdown, theme="Cyberpunk")
+        try:
+            html_content = self.deep_researcher.render_beautiful_html(
+                title=briefing_title,
+                markdown_content=report_markdown,
+                category="デイリーブリーフィング"
+            )
+        except Exception:
+            html_content = self.researcher.render_beautiful_html(briefing_title, report_markdown, theme="Cyberpunk")
 
         if save_desk:
             os.makedirs(self.desk_briefing_dir, exist_ok=True)

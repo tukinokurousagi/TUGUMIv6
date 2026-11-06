@@ -26,6 +26,7 @@ logs/tools/
 data/tugumi_memory.db
 data/rag_vector_cache.json
 data/snapshots/
+data/briefings/
 crypto_trader/trader_history.db
 
 # Secrets & Environment variables

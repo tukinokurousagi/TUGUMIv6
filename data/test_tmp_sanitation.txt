@@ -1,3 +1,0 @@
-Line 1: Hello Master Takuma
-Line 2: Target to replace
-Line 3: End

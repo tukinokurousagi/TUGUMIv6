@@ -47,12 +47,20 @@ class TestTokenCostTracker(unittest.TestCase):
         self.assertEqual(self.tracker.session_total, 15000)
 
     def test_render_cost_banner(self):
-        console = Console(record=True, width=80)
+        # 1. ワイド画面（フル詳細表示：モデル名・詳細内訳が含まれる）
+        console_wide = Console(record=True, width=120)
         self.tracker.record_turn(prompt_text="Hello", response_text="World")
-        self.tracker.render_cost_banner(console)
-        output = console.export_text()
-        self.assertIn("Gemini 3.8 Flash", output)
-        self.assertIn("¥", output)
+        self.tracker.render_cost_banner(console_wide)
+        output_wide = console_wide.export_text()
+        self.assertIn("Gemini 3.8 Flash", output_wide)
+        self.assertIn("¥", output_wide)
+
+        # 2. スマホ・ナロー画面（スマート短縮表示：折返し防止）
+        console_narrow = Console(record=True, width=60)
+        self.tracker.render_cost_banner(console_narrow)
+        output_narrow = console_narrow.export_text()
+        self.assertIn("¥", output_narrow)
+        self.assertIn("Turn:", output_narrow)
 
 
 class TestTaskInterrupter(unittest.TestCase):
